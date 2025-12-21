@@ -13,7 +13,7 @@ const DEFAULT_SETTINGS = {
     curvature: -0.1,
     blur: 0.5,
     sharpen: 1.0,
-    interlace: 0.0,
+    interlace: 0.2,
     quality: 240,
     zoom: 1.0,
     aspectRatio: '4:3',
