@@ -34,7 +34,7 @@ const state = {
     showSettings: false,
     flashMode: 'auto', // auto, on, off
     cameraFacing: 'environment',
-    isDevicePortrait: window.innerHeight > window.innerWidth,
+    isDevicePortrait: true, // Will be updated in init
     settings: { ...DEFAULT_SETTINGS },
     currentLuma: 0
 };
@@ -53,6 +53,7 @@ let touchStartY = 0;
 let lastFrameTime = 0;
 let currentSourceRes = '720p';
 const LONG_PRESS_MS = 300;
+const STORAGE_KEY = 'twosies_settings_v1';
 
 // DOM Elements
 const els = {
@@ -95,8 +96,18 @@ const els = {
 // --- Initialization ---
 
 function init() {
+    loadSettings();
+    detectOrientation();
+
+    // Orientation & Resize Listeners
+    if (screen.orientation) {
+        screen.orientation.addEventListener('change', () => {
+            detectOrientation();
+            updateUI();
+        });
+    }
     window.addEventListener('resize', () => {
-        state.isDevicePortrait = window.innerHeight > window.innerWidth;
+        detectOrientation();
         updateUI();
     });
 
@@ -104,6 +115,35 @@ function init() {
     setupEventListeners();
     startCamera();
     updateUI();
+}
+
+function loadSettings() {
+    try {
+        const saved = localStorage.getItem(STORAGE_KEY);
+        if (saved) {
+            const parsed = JSON.parse(saved);
+            state.settings = { ...DEFAULT_SETTINGS, ...parsed };
+            currentSourceRes = state.settings.sourceResolution;
+        }
+    } catch (e) {
+        console.error('Failed to load settings', e);
+    }
+}
+
+function saveSettings() {
+    try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(state.settings));
+    } catch (e) {
+        console.error('Failed to save settings', e);
+    }
+}
+
+function detectOrientation() {
+    if (screen.orientation && screen.orientation.type) {
+        state.isDevicePortrait = screen.orientation.type.includes('portrait');
+    } else {
+        state.isDevicePortrait = window.innerHeight > window.innerWidth;
+    }
 }
 
 function setupEventListeners() {
@@ -250,6 +290,9 @@ function calculateTargetDimensions() {
     const [aspectW, aspectH] = s.aspectRatio.split(':').map(Number);
     let ratio = aspectW / aspectH;
     
+    // In "auto" orientation mode, we flip the ratio if the device is portrait
+    // because "4:3" usually means 4 wide 3 high relative to the sensor, 
+    // but in portrait the screen is 3 wide 4 high.
     let isPortrait = s.orientation === 'auto' ? state.isDevicePortrait : s.orientation === 'portrait';
 
     if (isPortrait && ratio > 1) ratio = 1 / ratio;
@@ -624,13 +667,7 @@ function endPress(e) {
         }
         if (state.isRecording && !state.isLocked) {
              stopRecording();
-             // Discard the recording if it was a cancel? 
-             // Logic: If user was holding (recording) and slid off, we usually stop.
-             // But if they didn't lock, maybe we just keep the video?
-             // Actually, usually sliding off a button cancels the action.
-             // For video, stopping is the action.
         }
-        // Do not trigger capturePhoto
         return;
     }
 
@@ -871,6 +908,7 @@ function renderSettingsUI() {
                 const val = parseFloat(e.target.value);
                 state.settings[def.key] = val;
                 valSpan.textContent = val + (def.unit || '');
+                saveSettings();
                 updateUI();
             };
         } else if (def.type === 'select') {
@@ -892,6 +930,7 @@ function renderSettingsUI() {
                         setTimeout(startCamera, 100);
                      }
                  }
+                 saveSettings();
                  updateUI();
              }
              labelRow.appendChild(input);
@@ -909,6 +948,7 @@ function renderSettingsUI() {
     resetBtn.textContent = "RESET TO DEFAULTS";
     resetBtn.onclick = () => {
         state.settings = { ...DEFAULT_SETTINGS };
+        saveSettings();
         renderSettingsUI();
         updateUI();
     };
