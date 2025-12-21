@@ -1346,7 +1346,7 @@ const SETTING_DEFS = [
     { key: 'aspectRatio', label: 'ASPECT RATIO', type: 'select', options: ['4:3', '16:9', '1:1', '9:16'] },
     { key: 'orientation', label: 'ORIENTATION', type: 'select', options: ['auto', 'landscape', 'portrait'] },
     { key: 'sourceResolution', label: 'CAMERA QUALITY', type: 'select', options: ['480p', '720p', '1080p'] },
-    { key: 'quality', label: 'EFFECT RESOLUTION', type: 'range', min: 80, max: 480, step: 20, unit: 'px' },
+    { key: 'quality', label: 'EFFECT RESOLUTION', type: 'range', min: 80, max: 1080, step: 20, unit: 'px' },
     { key: 'fps', label: 'FRAME RATE', type: 'range', min: 1, max: 30, step: 1, unit: ' FPS' },
     { key: 'curvature', label: 'LENS CURVATURE', type: 'range', min: -0.5, max: 0.5, step: 0.05, unit: '' },
     { key: 'blur', label: 'SOFTNESS (BLUR)', type: 'range', min: 0, max: 3, step: 0.1, unit: 'px' },
@@ -1391,7 +1391,16 @@ function renderSettingsUI() {
 
             input = document.createElement('input');
             input.type = 'range';
-            input.min = def.min; input.max = def.max; input.step = def.step;
+            
+            // Dynamic Max Logic for Quality
+            let max = def.max;
+            if (def.key === 'quality') {
+                if (state.settings.sourceResolution === '1080p') max = 1080;
+                else if (state.settings.sourceResolution === '720p') max = 720;
+                else max = 480;
+            }
+
+            input.min = def.min; input.max = max; input.step = def.step;
             input.value = state.settings[def.key];
             input.oninput = (e) => {
                 const val = parseFloat(e.target.value);
@@ -1421,8 +1430,24 @@ function renderSettingsUI() {
                  if (def.key === 'sourceResolution') {
                      if (currentSourceRes !== state.settings.sourceResolution) {
                         currentSourceRes = state.settings.sourceResolution;
+                        
+                        // Handle Quality Max Cap
+                        let newMax = 480;
+                        if (currentSourceRes === '720p') newMax = 720;
+                        if (currentSourceRes === '1080p') newMax = 1080;
+                        
+                        // Clamp if quality exceeds new resolution
+                        if (state.settings.quality > newMax) {
+                            state.settings.quality = newMax;
+                        }
+
                         stopCamera();
                         setTimeout(startCamera, 100);
+                        
+                        // Re-render settings to update slider limits
+                        renderSettingsUI();
+                        saveSettings();
+                        return;
                      }
                  }
                  saveSettings();
