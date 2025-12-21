@@ -1,4 +1,5 @@
 
+
 // Default Settings
 const DEFAULT_SETTINGS = {
     fps: 12,
@@ -37,7 +38,8 @@ const state = {
     cameraFacing: 'environment',
     isDevicePortrait: true, // Will be updated in init
     settings: { ...DEFAULT_SETTINGS },
-    currentLuma: 0
+    currentLuma: 0,
+    flashActiveFrame: false // triggers whiteout in processFrame
 };
 
 // Internal Logic Variables
@@ -53,8 +55,16 @@ let pressTimer = null;
 let touchStartY = 0;
 let lastFrameTime = 0;
 let currentSourceRes = '720p';
+let db = null; // IndexedDB instance
+
+// Pinch Zoom Variables
+let initialPinchDist = 0;
+let initialPinchZoom = 1.0;
+
 const LONG_PRESS_MS = 300;
 const STORAGE_KEY = 'twosies_settings_v1';
+const DB_NAME = 'twosies_db';
+const STORE_NAME = 'backups';
 
 // DOM Elements
 const els = {
@@ -91,13 +101,16 @@ const els = {
     btnSettings: document.getElementById('btn-settings'),
     btnCloseSettings: document.getElementById('btn-close-settings'),
     btnTrash: document.getElementById('btn-trash'),
-    btnSave: document.getElementById('btn-save')
+    btnSave: document.getElementById('btn-save'),
+    backupsSection: document.getElementById('backups-section'),
+    backupsList: document.getElementById('backups-list')
 };
 
 // --- Initialization ---
 
 function init() {
     loadSettings();
+    initDB(); // Initialize IndexedDB
     detectOrientation();
 
     // Orientation & Resize Listeners
@@ -139,6 +152,127 @@ function saveSettings() {
     }
 }
 
+// --- IndexedDB Logic ---
+
+function initDB() {
+    const request = indexedDB.open(DB_NAME, 1);
+    
+    request.onerror = (e) => console.error("DB Error", e);
+    
+    request.onupgradeneeded = (e) => {
+        const db = e.target.result;
+        if (!db.objectStoreNames.contains(STORE_NAME)) {
+            db.createObjectStore(STORE_NAME, { keyPath: "id" });
+        }
+    };
+    
+    request.onsuccess = (e) => {
+        db = e.target.result;
+        deleteOldBackups(); // Cleanup on init
+    };
+}
+
+function saveToBackup(blob, type) {
+    if (!db) return;
+    
+    // Create thumbnail for backup list
+    let thumb = '';
+    if (type === 'image') {
+        // Use the blob directly if image, or create a small version? 
+        // For simplicity, we store the full blob.
+        // In a real app, we might want a separate thumb store.
+    }
+    
+    const item = {
+        id: Date.now(),
+        type: type,
+        blob: blob,
+        date: new Date()
+    };
+    
+    const tx = db.transaction([STORE_NAME], "readwrite");
+    tx.objectStore(STORE_NAME).add(item);
+}
+
+function deleteOldBackups() {
+    if (!db) return;
+    const tx = db.transaction([STORE_NAME], "readwrite");
+    const store = tx.objectStore(STORE_NAME);
+    const thirtyDaysAgo = Date.now() - (30 * 24 * 60 * 60 * 1000);
+    
+    const request = store.getAll();
+    request.onsuccess = () => {
+        const items = request.result;
+        items.forEach(item => {
+            if (item.id < thirtyDaysAgo) {
+                store.delete(item.id);
+            }
+        });
+    };
+}
+
+function loadBackupsUI() {
+    if (!db) return;
+    els.backupsSection.classList.remove('hidden');
+    els.backupsList.innerHTML = 'Loading...';
+    
+    const tx = db.transaction([STORE_NAME], "readonly");
+    const store = tx.objectStore(STORE_NAME);
+    const request = store.getAll();
+    
+    request.onsuccess = () => {
+        const items = request.result.sort((a, b) => b.id - a.id); // Newest first
+        els.backupsList.innerHTML = '';
+        
+        if (items.length === 0) {
+            els.backupsList.innerHTML = '<div style="grid-column: span 3; color: #555; text-align: center; padding: 1rem;">NO BACKUPS FOUND</div>';
+            return;
+        }
+
+        items.forEach(item => {
+            const div = document.createElement('div');
+            div.className = 'backup-item';
+            
+            const url = URL.createObjectURL(item.blob);
+            
+            if (item.type === 'image') {
+                const img = document.createElement('img');
+                img.src = url;
+                img.className = 'backup-thumb';
+                div.appendChild(img);
+            } else {
+                const vid = document.createElement('video');
+                vid.src = url;
+                vid.className = 'backup-thumb';
+                vid.muted = true;
+                div.appendChild(vid);
+                
+                const icon = document.createElement('div');
+                icon.className = 'backup-video-icon';
+                div.appendChild(icon);
+            }
+            
+            div.onclick = () => {
+                // Restore logic
+                if (item.type === 'image') {
+                    state.capturedImage = url;
+                    state.capturedVideo = null;
+                } else {
+                    state.capturedVideo = url;
+                    state.capturedImage = null;
+                }
+                toggleSettings(); // Close settings
+                updateUI();
+            };
+            
+            els.backupsList.appendChild(div);
+        });
+    };
+}
+
+
+// --- Hardware Logic ---
+
 function detectOrientation() {
     if (screen.orientation && screen.orientation.type) {
         state.isDevicePortrait = screen.orientation.type.includes('portrait');
@@ -168,10 +302,49 @@ function setupEventListeners() {
     els.btnShutter.addEventListener('mouseleave', end);
     els.btnShutter.addEventListener('touchend', end);
     
+    // Pinch Zoom detection on viewfinder as well
+    els.viewfinder.addEventListener('touchstart', (e) => {
+        if (e.touches.length === 2) {
+            initialPinchDist = Math.hypot(
+                e.touches[0].pageX - e.touches[1].pageX,
+                e.touches[0].pageY - e.touches[1].pageY
+            );
+            initialPinchZoom = state.settings.zoom;
+        }
+    });
+
+    els.viewfinder.addEventListener('touchmove', (e) => handlePinchMove(e));
+    
+    // Also attach to shutter for dragging lock, but propagate pinch
     els.btnShutter.addEventListener('touchmove', move);
 }
 
-// --- Logic Methods ---
+function handlePinchMove(e) {
+    if (e.touches.length === 2 && initialPinchDist > 0) {
+        const dist = Math.hypot(
+            e.touches[0].pageX - e.touches[1].pageX,
+            e.touches[0].pageY - e.touches[1].pageY
+        );
+        
+        const scale = dist / initialPinchDist;
+        let newZoom = initialPinchZoom * scale;
+        
+        // Clamp
+        newZoom = Math.max(1.0, Math.min(4.0, newZoom));
+        state.settings.zoom = parseFloat(newZoom.toFixed(1));
+        
+        // Update UI logic
+        els.zoomIndicator.textContent = state.settings.zoom + 'x';
+        els.zoomIndicator.classList.remove('hidden');
+        
+        // Debounce saving settings
+        if (pressTimer) clearTimeout(pressTimer);
+        pressTimer = setTimeout(() => {
+             saveSettings();
+             els.zoomIndicator.classList.add('hidden');
+        }, 1000);
+    }
+}
 
 async function startCamera() {
     state.hasError = null;
@@ -219,34 +392,78 @@ function initStream(stream) {
         audioStream = new MediaStream(audioTracks);
     }
 
+    // Assign to video element
     els.video.srcObject = stream;
     
-    const track = stream.getVideoTracks()[0];
-    if (track) {
-        const s = track.getSettings();
-        if (s.facingMode && (s.facingMode === 'user' || s.facingMode === 'environment')) {
-            // state.cameraFacing = s.facingMode;
-        }
-    }
-
     els.video.onloadedmetadata = () => {
         els.video.play().catch(e => console.error('Play error', e));
-        startProcessingLoop();
+        // Only start loop if not already running (seamless switching)
+        if (!animationFrameId) startProcessingLoop();
     };
     updateUI();
 }
 
-function stopCamera() {
+function stopCamera(stopAudio = true) {
     if (els.video.srcObject) {
-        els.video.srcObject.getTracks().forEach(track => track.stop());
+        els.video.srcObject.getVideoTracks().forEach(track => track.stop());
+        if (stopAudio) {
+            els.video.srcObject.getAudioTracks().forEach(track => track.stop());
+        }
     }
-    state.streamActive = false;
+    // We do NOT set streamActive = false here if we want seamless switch
+    // But for full stop we would.
 }
 
-function toggleCamera() {
+async function toggleCamera() {
+    // Seamless switch logic
     state.cameraFacing = state.cameraFacing === 'environment' ? 'user' : 'environment';
-    stopCamera();
-    setTimeout(startCamera, 100);
+    
+    // Stop only video tracks, keep audio if recording?
+    // Actually, getUserMedia will get us a new stream.
+    // If we are recording, we are recording the Canvas Capture Stream.
+    // The Canvas Capture Stream comes from the canvas.
+    // The canvas is painted by processFrame.
+    // processFrame reads from els.video.
+    // So we just need to hot-swap els.video.srcObject without killing the MediaRecorder.
+
+    const wasRecording = state.isRecording;
+
+    // Stop current tracks
+    if (els.video.srcObject) {
+        els.video.srcObject.getTracks().forEach(t => t.stop());
+    }
+
+    // We don't call stopCamera() because we don't want to kill the loop or state vars
+    
+    try {
+        const resolutionConstraints = getConstraintsForResolution(state.settings.sourceResolution);
+        const newStream = await navigator.mediaDevices.getUserMedia({
+            video: {
+                ...resolutionConstraints,
+                facingMode: { ideal: state.cameraFacing }
+            },
+            audio: true // Always get audio again to be safe
+        });
+        
+        // Update audio stream reference for future recordings (or current? MediaRecorder is already bound)
+        // Note: Changing audio source mid-MediaRecorder is hard. 
+        // The MediaRecorder is likely bound to the stream created at startRecording.
+        // If that stream was created from canvas + initial audio track, that audio track is now dead.
+        // Complex constraint: Seamless audio switching in MediaRecorder is difficult without WebAudio API mixing.
+        // For this retro app, losing audio momentarily or entirely on switch is acceptable 
+        // as long as the video doesn't stop.
+        
+        els.video.srcObject = newStream;
+        els.video.play();
+        
+        // Logic: The canvas loop continues running. It might read black frames for a moment.
+        // This is acceptable glitching for a retro app.
+
+    } catch (e) {
+        console.error("Failed to switch camera", e);
+        state.hasError = "LENS ERROR";
+        updateUI();
+    }
 }
 
 function toggleFlash() {
@@ -275,7 +492,7 @@ function startProcessingLoop() {
         const frameInterval = 1000 / currentFPS;
         const elapsed = timestamp - lastFrameTime;
 
-        if (!state.capturedImage && !state.capturedVideo && els.video.readyState >= 2) {
+        if (!state.capturedImage && !state.capturedVideo) {
             if (elapsed > frameInterval) {
                 lastFrameTime = timestamp - (elapsed % frameInterval);
                 processFrame();
@@ -292,8 +509,6 @@ function calculateTargetDimensions() {
     let ratio = aspectW / aspectH;
     
     // In "auto" orientation mode, we flip the ratio if the device is portrait
-    // because "4:3" usually means 4 wide 3 high relative to the sensor, 
-    // but in portrait the screen is 3 wide 4 high.
     let isPortrait = s.orientation === 'auto' ? state.isDevicePortrait : s.orientation === 'portrait';
 
     if (isPortrait && ratio > 1) ratio = 1 / ratio;
@@ -333,6 +548,9 @@ function resizeBuffer(src, sw, sh, dw, dh) {
 
 function processFrame() {
     const video = els.video;
+    // Handle video not ready
+    if (video.readyState < 2) return;
+
     const canvas = els.canvas;
     const ctx = canvas.getContext('2d', { willReadFrequently: true });
     const s = state.settings;
@@ -349,7 +567,6 @@ function processFrame() {
         canvas.height = renderH;
         lastRenderWidth = renderW;
         lastRenderHeight = renderH;
-        // Keep UI aspect ratio in sync
         updateViewfinderAspect(s.aspectRatio, s.orientation);
     }
 
@@ -583,6 +800,14 @@ function processFrame() {
 
             r *= s.brightness; g *= s.brightness; b *= s.brightness;
 
+            // Flash Blowout - If flash active frame, override processing
+            if (state.flashActiveFrame) {
+                // Extreme blowout
+                r = r * 3 + 100;
+                g = g * 3 + 100;
+                b = b * 3 + 100;
+            }
+
             const noise = (Math.random()-0.5)*s.noise;
             r+=noise; g+=noise; b+=noise;
 
@@ -630,8 +855,18 @@ function startPress(e) {
 }
 
 function handleTouchMove(e) {
-    if (!state.isRecording || state.isLocked || state.showSettings) return;
-    if (e.touches && e.touches.length > 0) {
+    if (state.showSettings) return;
+
+    // Check for pinch first (2 touches)
+    if (e.touches && e.touches.length === 2) {
+        handlePinchMove(e);
+        return;
+    }
+
+    if (!state.isRecording || state.isLocked) return;
+    
+    // Lock drag logic (1 touch)
+    if (e.touches && e.touches.length === 1) {
         const diff = touchStartY - e.touches[0].clientY;
         if (diff > 60) {
             state.isLocked = true;
@@ -684,23 +919,50 @@ function endPress(e) {
     }
 }
 
-function capturePhoto() {
+async function capturePhoto() {
     if (!state.streamActive) return;
 
     let shouldFlash = state.flashMode === 'on';
     if (state.flashMode === 'auto' && state.currentLuma < 80) shouldFlash = true;
 
     if (shouldFlash) {
+        // 1. Show UI Overlay instantly
+        els.flashOverlay.classList.add('active'); // Instant opacity 1
         els.flashOverlay.classList.remove('hidden');
-        setTimeout(() => els.flashOverlay.classList.add('hidden'), 150);
-    }
 
-    const dataUrl = els.canvas.toDataURL('image/jpeg', 0.6);
+        // 2. Set render flag to blow out next frame
+        state.flashActiveFrame = true;
+
+        // 3. Wait a moment for frame to process and user to perceive flash
+        await new Promise(r => setTimeout(r, 80));
+
+        // 4. Capture
+        const dataUrl = els.canvas.toDataURL('image/jpeg', 0.85);
+
+        // 5. Reset flags
+        state.flashActiveFrame = false;
+        
+        // 6. Fade out overlay
+        els.flashOverlay.classList.remove('active'); // Revert to transition
+        setTimeout(() => els.flashOverlay.classList.add('hidden'), 500); // Hide after fade
+
+        processCapture(dataUrl);
+    } else {
+        const dataUrl = els.canvas.toDataURL('image/jpeg', 0.85);
+        processCapture(dataUrl);
+    }
+}
+
+async function processCapture(dataUrl) {
+    // Save backup to IDB
+    try {
+        const res = await fetch(dataUrl);
+        const blob = await res.blob();
+        saveToBackup(blob, 'image');
+    } catch(e) { console.error("Backup failed", e); }
 
     if (state.settings.autoSave === 'on') {
-        // Auto Save mode
         saveMedia(dataUrl, 'image').then(() => {
-            // Optional: flash UI or indicator
             const prevText = els.counterText.textContent;
             els.counterText.textContent = "SAVED";
             setTimeout(() => {
@@ -708,7 +970,6 @@ function capturePhoto() {
             }, 1000);
         });
     } else {
-        // Review mode
         state.capturedImage = dataUrl;
         state.capturedVideo = null;
         updateUI();
@@ -723,18 +984,22 @@ function startRecording() {
 
     const canvasStream = els.canvas.captureStream(state.settings.fps);
     let finalStream = canvasStream;
-    if (audioStream) {
+    
+    // We try to attach audio. 
+    if (audioStream && audioStream.getAudioTracks().length > 0) {
+        // We clone the track so we don't interfere with main stream if we were using it elsewhere
+        // But here we just use the raw track.
         finalStream = new MediaStream([...canvasStream.getVideoTracks(), ...audioStream.getAudioTracks()]);
     }
 
     try {
         mediaRecorder = new MediaRecorder(finalStream, {
             mimeType: 'video/webm;codecs=vp8,opus',
-            videoBitsPerSecond: 250000
+            videoBitsPerSecond: 2500000 // Increased bitrate
         });
     } catch (e) {
         try {
-            mediaRecorder = new MediaRecorder(finalStream, { videoBitsPerSecond: 250000 });
+            mediaRecorder = new MediaRecorder(finalStream, { videoBitsPerSecond: 2500000 });
         } catch(e2) {
             state.isRecording = false;
             return;
@@ -747,6 +1012,10 @@ function startRecording() {
 
     mediaRecorder.onstop = () => {
         const blob = new Blob(recordedChunks, { type: 'video/webm' });
+        
+        // Backup
+        saveToBackup(blob, 'video');
+        
         const url = URL.createObjectURL(blob);
         
         if (state.settings.autoSave === 'on') {
@@ -769,7 +1038,7 @@ function startRecording() {
         }
     };
 
-    mediaRecorder.start();
+    mediaRecorder.start(1000); // Request data every second
 }
 
 function stopRecording() {
@@ -839,6 +1108,10 @@ async function saveMedia(url, type) {
 
 function toggleSettings() {
     state.showSettings = !state.showSettings;
+    if (state.showSettings) {
+        // Refresh backup list when opening
+        loadBackupsUI();
+    }
     updateUI();
 }
 
@@ -867,7 +1140,9 @@ function updateUI() {
     els.recIndicator.classList.toggle('hidden', !state.isRecording);
     els.recStateText.textContent = state.isLocked ? 'LOCKED' : 'REC';
 
-    els.zoomIndicator.classList.toggle('hidden', state.showSettings || state.capturedImage || state.capturedVideo || state.settings.zoom <= 1.0);
+    // Show zoom indicator if zoomed or setting active
+    const isZoomed = state.settings.zoom > 1.0;
+    els.zoomIndicator.classList.toggle('hidden', state.showSettings || state.capturedImage || state.capturedVideo || !isZoomed);
     els.zoomIndicator.textContent = state.settings.zoom + 'x';
 
     // Controls
@@ -1022,6 +1297,19 @@ function renderSettingsUI() {
         updateUI();
     };
     container.appendChild(resetBtn);
+    
+    // View Backups Button
+    const backupsBtn = document.createElement('button');
+    backupsBtn.className = "btn-view-backups";
+    backupsBtn.textContent = "VIEW BACKUPS";
+    backupsBtn.onclick = () => {
+        if (els.backupsSection.classList.contains('hidden')) {
+            loadBackupsUI();
+        } else {
+            els.backupsSection.classList.add('hidden');
+        }
+    };
+    container.appendChild(backupsBtn);
 }
 
 // Start app
