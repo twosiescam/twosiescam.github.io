@@ -1,5 +1,3 @@
-
-
 // Default Settings
 const DEFAULT_SETTINGS = {
     fps: 12,
@@ -12,7 +10,7 @@ const DEFAULT_SETTINGS = {
     noise: 35,
     scanlineIntensity: 0.8,
     trackingNoise: 0.3,
-    curvature: -0.1,
+    curvature: -0.05,
     blur: 0.5,
     sharpen: 1.0,
     bloom: 0.4,
@@ -23,7 +21,9 @@ const DEFAULT_SETTINGS = {
     orientation: 'auto',
     sourceResolution: '480p',
     autoSave: 'off',
-    saveMode: 'auto'
+    saveMode: 'auto',
+    audioHiss: 0.2,
+    audioDistortion: 0.3
 };
 
 // Application State
@@ -58,6 +58,15 @@ let touchStartY = 0;
 let lastFrameTime = 0;
 let currentSourceRes = '720p';
 let db = null; // IndexedDB instance
+
+// Audio Context Global
+let audioCtx = null;
+let audioDest = null;
+let micSource = null;
+let hissNode = null;
+let hissGain = null;
+let distNode = null;
+let audioStreamProcessed = null;
 
 // Pinch Zoom Variables
 let initialPinchDist = 0;
@@ -176,14 +185,6 @@ function initDB() {
 
 function saveToBackup(blob, type) {
     if (!db) return;
-    
-    // Create thumbnail for backup list
-    let thumb = '';
-    if (type === 'image') {
-        // Use the blob directly if image, or create a small version? 
-        // For simplicity, we store the full blob.
-        // In a real app, we might want a separate thumb store.
-    }
     
     const item = {
         id: Date.now(),
@@ -386,12 +387,119 @@ async function startCamera() {
     }
 }
 
+// --- Audio Processing for Retro Effect ---
+
+function makeDistortionCurve(amount) {
+    const k = amount * 50;
+    const n_samples = 44100;
+    const curve = new Float32Array(n_samples);
+    for (let i = 0; i < n_samples; ++i) {
+        const x = i * 2 / n_samples - 1;
+        // Soft clipping curve
+        if (amount === 0) curve[i] = x;
+        else curve[i] = (Math.PI + k) * x / (Math.PI + k * Math.abs(x));
+    }
+    return curve;
+}
+
+function setupAudioGraph(inStream) {
+    if (!audioCtx) {
+        const AudioContext = window.AudioContext || window.webkitAudioContext;
+        audioCtx = new AudioContext();
+    }
+    if (audioCtx.state === 'suspended') {
+        audioCtx.resume();
+    }
+    
+    // Cleanup old graph
+    if (micSource) { try { micSource.disconnect(); } catch(e){} }
+    if (hissNode) { try { hissNode.stop(); hissNode.disconnect(); } catch(e){} }
+    if (hissGain) { try { hissGain.disconnect(); } catch(e){} }
+    
+    // Create Destination
+    if (!audioDest) audioDest = audioCtx.createMediaStreamDestination();
+    
+    // Source
+    micSource = audioCtx.createMediaStreamSource(inStream);
+    
+    // --- Processing Chain ---
+    
+    // 1. Bandpass (Lo-fi Mic simulation)
+    const lowPass = audioCtx.createBiquadFilter();
+    lowPass.type = 'lowpass';
+    lowPass.frequency.value = 3500; // Cut high fidelity
+    
+    const highPass = audioCtx.createBiquadFilter();
+    highPass.type = 'highpass';
+    highPass.frequency.value = 300; // Cut low rumble
+    
+    // 2. Distortion / Saturation
+    distNode = audioCtx.createWaveShaper();
+    distNode.curve = makeDistortionCurve(state.settings.audioDistortion);
+    distNode.oversample = 'none';
+
+    // 3. Compression (Leveling)
+    const compressor = audioCtx.createDynamicsCompressor();
+    compressor.threshold.value = -20;
+    compressor.knee.value = 40;
+    compressor.ratio.value = 12;
+    compressor.attack.value = 0;
+    compressor.release.value = 0.25;
+
+    // Connect Mic Path
+    micSource.connect(highPass);
+    highPass.connect(lowPass);
+    lowPass.connect(distNode);
+    distNode.connect(compressor);
+    compressor.connect(audioDest);
+    
+    // --- Hiss Generator ---
+    const bufferSize = audioCtx.sampleRate * 2;
+    const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
+    const data = buffer.getChannelData(0);
+    // Pink-ish noise approximation
+    for (let i = 0; i < bufferSize; i++) {
+        const white = Math.random() * 2 - 1;
+        data[i] = (lastOut + (0.02 * white)) / 1.02;
+        lastOut = data[i];
+        data[i] *= 3.5; // Compensate gain
+    }
+    let lastOut = 0;
+    
+    hissNode = audioCtx.createBufferSource();
+    hissNode.buffer = buffer;
+    hissNode.loop = true;
+    hissNode.start();
+    
+    hissGain = audioCtx.createGain();
+    hissGain.gain.value = state.settings.audioHiss * 0.05; // Base level scale
+    hissNode.connect(hissGain);
+    hissGain.connect(audioDest);
+    
+    audioStreamProcessed = audioDest.stream;
+}
+
+function updateAudioParams() {
+    if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+    
+    if (hissGain) {
+        // Logarithmic adjustment feels better for volume
+        hissGain.gain.setTargetAtTime(state.settings.audioHiss * 0.05, audioCtx.currentTime, 0.1);
+    }
+    if (distNode) {
+        distNode.curve = makeDistortionCurve(state.settings.audioDistortion);
+    }
+}
+
+
 function initStream(stream) {
     state.streamActive = true;
     
     const audioTracks = stream.getAudioTracks();
     if (audioTracks.length > 0) {
         audioStream = new MediaStream(audioTracks);
+        // Initialize Retro Audio Processing
+        setupAudioGraph(audioStream);
     }
 
     // Assign to video element
@@ -412,30 +520,15 @@ function stopCamera(stopAudio = true) {
             els.video.srcObject.getAudioTracks().forEach(track => track.stop());
         }
     }
-    // We do NOT set streamActive = false here if we want seamless switch
-    // But for full stop we would.
 }
 
 async function toggleCamera() {
     // Seamless switch logic
     state.cameraFacing = state.cameraFacing === 'environment' ? 'user' : 'environment';
-    
-    // Stop only video tracks, keep audio if recording?
-    // Actually, getUserMedia will get us a new stream.
-    // If we are recording, we are recording the Canvas Capture Stream.
-    // The Canvas Capture Stream comes from the canvas.
-    // The canvas is painted by processFrame.
-    // processFrame reads from els.video.
-    // So we just need to hot-swap els.video.srcObject without killing the MediaRecorder.
 
-    const wasRecording = state.isRecording;
-
-    // Stop current tracks
     if (els.video.srcObject) {
         els.video.srcObject.getTracks().forEach(t => t.stop());
     }
-
-    // We don't call stopCamera() because we don't want to kill the loop or state vars
     
     try {
         const resolutionConstraints = getConstraintsForResolution(state.settings.sourceResolution);
@@ -444,22 +537,17 @@ async function toggleCamera() {
                 ...resolutionConstraints,
                 facingMode: { ideal: state.cameraFacing }
             },
-            audio: true // Always get audio again to be safe
+            audio: true 
         });
         
-        // Update audio stream reference for future recordings (or current? MediaRecorder is already bound)
-        // Note: Changing audio source mid-MediaRecorder is hard. 
-        // The MediaRecorder is likely bound to the stream created at startRecording.
-        // If that stream was created from canvas + initial audio track, that audio track is now dead.
-        // Complex constraint: Seamless audio switching in MediaRecorder is difficult without WebAudio API mixing.
-        // For this retro app, losing audio momentarily or entirely on switch is acceptable 
-        // as long as the video doesn't stop.
+        // Re-init audio with new stream
+        if (newStream.getAudioTracks().length > 0) {
+            audioStream = new MediaStream(newStream.getAudioTracks());
+            setupAudioGraph(audioStream);
+        }
         
         els.video.srcObject = newStream;
         els.video.play();
-        
-        // Logic: The canvas loop continues running. It might read black frames for a moment.
-        // This is acceptable glitching for a retro app.
 
     } catch (e) {
         console.error("Failed to switch camera", e);
@@ -835,7 +923,10 @@ function processFrame() {
     ctx.putImageData(renderImageData, 0, 0);
     previousRawFrameData = currentRawFrameSnapshot;
 
-    // --- Bloom Pass ---
+    // --- Bloom Pass (FIXED) ---
+    // Instead of drawing raw video (which creates ghosting due to curvature mismatch),
+    // we draw the *already processed* canvas content back onto itself with a blur.
+    // This ensures the bloom aligns perfectly with the distorted, pixelated image.
     if (s.bloom > 0) {
         ctx.save();
         ctx.globalCompositeOperation = 'screen';
@@ -844,14 +935,9 @@ function processFrame() {
         ctx.filter = `blur(${blurAmt}px) brightness(1.5) contrast(1.2)`;
         ctx.globalAlpha = s.bloom * 0.6; 
         
-        // Draw the video frame over the retro rendering
-        // Note: We use the raw video so the bloom is "cleaner", mimicking light leak
-        if (state.cameraFacing === 'user') {
-            ctx.scale(-1, 1);
-            ctx.drawImage(video, cropX, cropY, cropW, cropH, -renderW, 0, renderW, renderH);
-        } else {
-            ctx.drawImage(video, cropX, cropY, cropW, cropH, 0, 0, renderW, renderH);
-        }
+        // Draw the canvas onto itself
+        ctx.drawImage(els.canvas, 0, 0, renderW, renderH);
+        
         ctx.restore();
     }
 }
@@ -863,6 +949,11 @@ function startPress(e) {
     if (e.cancelable) e.preventDefault();
     if (state.capturedImage || state.capturedVideo) return;
     
+    // Resume audio context on user interaction if needed
+    if (audioCtx && audioCtx.state === 'suspended') {
+        audioCtx.resume();
+    }
+
     // Stop propagation to avoid any global listeners
     e.stopPropagation();
 
@@ -1000,6 +1091,12 @@ async function processCapture(dataUrl) {
 
 function startRecording() {
     if (state.isRecording) return;
+    
+    // Ensure audio context is running
+    if (audioCtx && audioCtx.state === 'suspended') {
+        audioCtx.resume();
+    }
+
     state.isRecording = true;
     recordedChunks = [];
     updateUI();
@@ -1007,10 +1104,14 @@ function startRecording() {
     const canvasStream = els.canvas.captureStream(state.settings.fps);
     let finalStream = canvasStream;
     
-    // We try to attach audio. 
-    if (audioStream && audioStream.getAudioTracks().length > 0) {
-        // We clone the track so we don't interfere with main stream if we were using it elsewhere
-        // But here we just use the raw track.
+    // Attach retro-processed audio if available, otherwise raw, otherwise none
+    if (audioStreamProcessed) {
+        // Use the processed destination stream tracks
+        const audioTracks = audioStreamProcessed.getAudioTracks();
+        if (audioTracks.length > 0) {
+            finalStream = new MediaStream([...canvasStream.getVideoTracks(), ...audioTracks]);
+        }
+    } else if (audioStream && audioStream.getAudioTracks().length > 0) {
         finalStream = new MediaStream([...canvasStream.getVideoTracks(), ...audioStream.getAudioTracks()]);
     }
 
@@ -1260,7 +1361,9 @@ const SETTING_DEFS = [
     { key: 'saturation', label: 'SATURATION', type: 'range', min: 0, max: 4, step: 0.1, unit: 'x' },
     { key: 'brightness', label: 'BRIGHTNESS', type: 'range', min: 0, max: 2, step: 0.1, unit: 'x' },
     { key: 'contrast', label: 'CONTRAST', type: 'range', min: 0, max: 5, step: 0.1, unit: 'x' },
-    { key: 'noise', label: 'NOISE', type: 'range', min: 0, max: 100, step: 1, unit: '' }
+    { key: 'noise', label: 'NOISE', type: 'range', min: 0, max: 100, step: 1, unit: '' },
+    { key: 'audioHiss', label: 'TAPE HISS', type: 'range', min: 0, max: 1, step: 0.1, unit: '' },
+    { key: 'audioDistortion', label: 'AUDIO CRUNCH', type: 'range', min: 0, max: 1, step: 0.1, unit: '' }
 ];
 
 function renderSettingsUI() {
@@ -1295,7 +1398,13 @@ function renderSettingsUI() {
                 state.settings[def.key] = val;
                 valSpan.textContent = val + (def.unit || '');
                 saveSettings();
-                updateUI();
+                
+                // Update specific subsystems in real time
+                if (def.key.startsWith('audio')) {
+                    updateAudioParams();
+                } else {
+                    updateUI();
+                }
             };
         } else if (def.type === 'select') {
              input = document.createElement('select');
@@ -1356,4 +1465,3 @@ function renderSettingsUI() {
 
 // Start app
 init();
-    
