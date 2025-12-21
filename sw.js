@@ -5,8 +5,9 @@ const ASSETS_TO_CACHE = [
   './index.html',
   './style.css',
   './app.js',
-  './manifest.json',
-  'https://cdn.tailwindcss.com'
+  './favicon.png',
+  './icon.png',
+  './manifest.json'
 ];
 
 // Install Event: Cache core assets
