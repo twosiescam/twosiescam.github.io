@@ -1,5 +1,5 @@
 
-const CACHE_NAME = 'twosies-v1';
+const CACHE_NAME = 'twosies-v2';
 const ASSETS_TO_CACHE = [
   './',
   './index.html',
