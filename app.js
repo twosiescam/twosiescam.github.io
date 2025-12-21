@@ -706,8 +706,8 @@ function toggleSettings() {
 
 function updateUI() {
     // Flash
-    els.flashIcon.classList.toggle('text-amber-400', state.flashMode === 'on');
-    els.flashIcon.classList.toggle('text-zinc-600', state.flashMode !== 'on');
+    els.flashIcon.classList.toggle('color-amber', state.flashMode === 'on');
+    els.flashIcon.classList.toggle('color-zinc', state.flashMode !== 'on');
     els.flashOffSlash.classList.toggle('hidden', state.flashMode !== 'off');
     els.flashAutoText.classList.toggle('hidden', state.flashMode !== 'auto');
 
@@ -753,17 +753,8 @@ function updateUI() {
             els.containerShutter.classList.remove('hidden');
             
             els.hintLock.classList.toggle('hidden', !state.isRecording);
-            els.shutterOuter.classList.toggle('scale-95', state.isRecording);
-            
-            if (state.isRecording) {
-                els.shutterInner.classList.replace('bg-red-600', 'bg-red-500');
-                els.shutterInner.classList.replace('border-red-800', 'border-red-400');
-                els.shutterInner.classList.add('scale-75');
-            } else {
-                els.shutterInner.classList.replace('bg-red-500', 'bg-red-600');
-                els.shutterInner.classList.replace('border-red-400', 'border-red-800');
-                els.shutterInner.classList.remove('scale-75');
-            }
+            els.btnShutter.classList.toggle('shutter-pressed', state.isRecording);
+            els.btnShutter.classList.toggle('shutter-recording', state.isRecording);
         }
     }
     
@@ -775,16 +766,16 @@ function updateUI() {
 function updateViewfinderAspect(ratio, orientation) {
     const list = els.viewfinder.classList;
     // Remove old aspect classes
-    list.remove('aspect-[4/3]', 'aspect-[16/9]', 'aspect-[1/1]', 'aspect-[3/4]', 'aspect-[9/16]');
+    list.remove('ratio-4-3', 'ratio-16-9', 'ratio-1-1', 'ratio-3-4', 'ratio-9-16');
 
     let isPortrait = orientation === 'auto' ? state.isDevicePortrait : orientation === 'portrait';
 
     if (ratio === '1:1') {
-        list.add('aspect-[1/1]');
+        list.add('ratio-1-1');
     } else if (ratio === '4:3') {
-        list.add(isPortrait ? 'aspect-[3/4]' : 'aspect-[4/3]');
+        list.add(isPortrait ? 'ratio-3-4' : 'ratio-4-3');
     } else if (ratio === '16:9') {
-        list.add(isPortrait ? 'aspect-[9/16]' : 'aspect-[16/9]');
+        list.add(isPortrait ? 'ratio-9-16' : 'ratio-16-9');
     }
 }
 
@@ -819,10 +810,10 @@ function renderSettingsUI() {
     // Groups could be implemented, but flat list is fine for now
     SETTING_DEFS.forEach(def => {
         const div = document.createElement('div');
-        div.className = "flex flex-col gap-2 p-2 border-b border-zinc-800";
+        div.className = "setting-item";
         
         const labelRow = document.createElement('div');
-        labelRow.className = "flex justify-between text-xs text-zinc-400";
+        labelRow.className = "setting-label-row";
         
         const label = document.createElement('span');
         label.textContent = def.label;
@@ -847,7 +838,7 @@ function renderSettingsUI() {
             };
         } else if (def.type === 'select') {
              input = document.createElement('select');
-             input.className = "bg-zinc-800 text-zinc-300 text-xs p-1 rounded border border-zinc-600 outline-none";
+             input.className = "setting-select";
              def.options.forEach(opt => {
                  const o = document.createElement('option');
                  o.value = opt;
@@ -877,7 +868,7 @@ function renderSettingsUI() {
 
     // Reset Button
     const resetBtn = document.createElement('button');
-    resetBtn.className = "w-full py-4 text-xs font-bold tracking-widest text-zinc-500 hover:text-red-500 border border-zinc-800 hover:border-red-900/50 hover:bg-red-900/10 transition-all uppercase mt-4";
+    resetBtn.className = "btn-reset";
     resetBtn.textContent = "RESET TO DEFAULTS";
     resetBtn.onclick = () => {
         state.settings = { ...DEFAULT_SETTINGS };
