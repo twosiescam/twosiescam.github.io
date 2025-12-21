@@ -1,5 +1,5 @@
 # Twosies Camera
-Nostalgic and retro camera with extensive customization.
+Nostalgic and retro web-based camera with extensive customization. Completely offline and private to use.
 
 ![IMG_0255](https://github.com/user-attachments/assets/43567739-85b9-4cbd-bd12-4a02cce54f05)
 ![IMG_0254](https://github.com/user-attachments/assets/4a6b05b6-40e8-4089-abf4-213de75c2cdc)
