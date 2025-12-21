@@ -34,7 +34,7 @@ body {
     padding: 0;
     background-color: var(--c-black);
     color: var(--c-zinc-300);
-    font-family: 'Courier New', Courier, monospace;
+    font-family: 'Barlow Condensed', Courier, monospace;
     overflow: hidden;
     height: 100vh;
     width: 100vw;
