@@ -1,3 +1,5 @@
+
+
 // Default Settings
 const DEFAULT_SETTINGS = {
     fps: 12,
@@ -13,6 +15,7 @@ const DEFAULT_SETTINGS = {
     curvature: -0.1,
     blur: 0.5,
     sharpen: 1.0,
+    bloom: 0.4,
     interlace: 0.2,
     quality: 240,
     zoom: 1.0,
@@ -831,6 +834,26 @@ function processFrame() {
 
     ctx.putImageData(renderImageData, 0, 0);
     previousRawFrameData = currentRawFrameSnapshot;
+
+    // --- Bloom Pass ---
+    if (s.bloom > 0) {
+        ctx.save();
+        ctx.globalCompositeOperation = 'screen';
+        // Blur relative to resolution to keep look consistent
+        const blurAmt = Math.max(2, renderW * 0.05); 
+        ctx.filter = `blur(${blurAmt}px) brightness(1.5) contrast(1.2)`;
+        ctx.globalAlpha = s.bloom * 0.6; 
+        
+        // Draw the video frame over the retro rendering
+        // Note: We use the raw video so the bloom is "cleaner", mimicking light leak
+        if (state.cameraFacing === 'user') {
+            ctx.scale(-1, 1);
+            ctx.drawImage(video, cropX, cropY, cropW, cropH, -renderW, 0, renderW, renderH);
+        } else {
+            ctx.drawImage(video, cropX, cropY, cropW, cropH, 0, 0, renderW, renderH);
+        }
+        ctx.restore();
+    }
 }
 
 // --- Interaction Logic ---
@@ -1227,6 +1250,7 @@ const SETTING_DEFS = [
     { key: 'curvature', label: 'LENS CURVATURE', type: 'range', min: -0.5, max: 0.5, step: 0.05, unit: '' },
     { key: 'blur', label: 'SOFTNESS (BLUR)', type: 'range', min: 0, max: 3, step: 0.1, unit: 'px' },
     { key: 'sharpen', label: 'EDGE ENHANCE', type: 'range', min: 0, max: 3, step: 0.1, unit: 'x' },
+    { key: 'bloom', label: 'LIGHT BLOOM', type: 'range', min: 0, max: 1, step: 0.1, unit: '' },
     { key: 'interlace', label: 'TEMPORAL INTERLACE', type: 'range', min: 0, max: 1, step: 0.1, unit: '' },
     { key: 'jitterIntensity', label: 'SHAKE INTENSITY', type: 'range', min: 0, max: 50, step: 1, unit: 'px' },
     { key: 'trackingNoise', label: 'TRACKING ARTIFACTS', type: 'range', min: 0, max: 1, step: 0.1, unit: '' },
@@ -1332,4 +1356,4 @@ function renderSettingsUI() {
 
 // Start app
 init();
-   
+    
