@@ -1,0 +1,891 @@
+
+// Default Settings
+const DEFAULT_SETTINGS = {
+    fps: 12,
+    motionThreshold: 0.20,
+    jitterIntensity: 10,
+    hueShift: 0.4,
+    saturation: 1.6,
+    brightness: 0.9,
+    contrast: 2.4,
+    noise: 35,
+    scanlineIntensity: 0.8,
+    trackingNoise: 0.3,
+    curvature: -0.1,
+    blur: 0.5,
+    sharpen: 1.0,
+    interlace: 0.0,
+    quality: 240,
+    zoom: 1.0,
+    aspectRatio: '4:3',
+    orientation: 'auto',
+    sourceResolution: '720p'
+};
+
+// Application State
+const state = {
+    streamActive: false,
+    hasError: null,
+    capturedImage: null,
+    capturedVideo: null,
+    flashOn: false,
+    isRecording: false,
+    isLocked: false,
+    showSettings: false,
+    flashMode: 'auto', // auto, on, off
+    cameraFacing: 'environment',
+    isDevicePortrait: window.innerHeight > window.innerWidth,
+    settings: { ...DEFAULT_SETTINGS },
+    currentLuma: 0
+};
+
+// Internal Logic Variables
+let animationFrameId = null;
+let audioStream = null;
+let mediaRecorder = null;
+let recordedChunks = [];
+let previousRawFrameData = null;
+let lastRenderWidth = 0;
+let lastRenderHeight = 0;
+let jitterSustain = 0;
+let pressTimer = null;
+let touchStartY = 0;
+let lastFrameTime = 0;
+let currentSourceRes = '720p';
+const LONG_PRESS_MS = 300;
+
+// DOM Elements
+const els = {
+    video: document.getElementById('videoElement'),
+    canvas: document.getElementById('canvasElement'),
+    viewfinder: document.getElementById('viewfinder'),
+    settingsModal: document.getElementById('modal-settings'),
+    settingsContainer: document.getElementById('settings-container'),
+    flashIcon: document.getElementById('icon-flash'),
+    flashOffSlash: document.getElementById('flash-off-slash'),
+    flashAutoText: document.getElementById('flash-auto-text'),
+    recIndicator: document.getElementById('indicator-rec'),
+    recStateText: document.getElementById('text-rec-state'),
+    zoomIndicator: document.getElementById('indicator-zoom'),
+    errorDisplay: document.getElementById('error-display'),
+    errorMessage: document.getElementById('error-message'),
+    canvasContainer: document.getElementById('canvas-container'),
+    resultPhoto: document.getElementById('result-photo'),
+    resultImg: document.getElementById('result-img'),
+    resultVideo: document.getElementById('result-video'),
+    resultVid: document.getElementById('result-vid'),
+    flashOverlay: document.getElementById('flash-overlay'),
+    counterText: document.getElementById('counter-text'),
+    controlsCapture: document.getElementById('controls-capture'),
+    controlsReview: document.getElementById('controls-review'),
+    btnShutter: document.getElementById('btn-shutter'),
+    shutterInner: document.getElementById('shutter-inner'),
+    shutterOuter: document.getElementById('shutter-outer'),
+    btnStopLock: document.getElementById('btn-stop-lock'),
+    containerShutter: document.getElementById('container-shutter'),
+    hintLock: document.getElementById('hint-lock'),
+    btnFlip: document.getElementById('btn-flip'),
+    btnFlash: document.getElementById('btn-flash'),
+    btnSettings: document.getElementById('btn-settings'),
+    btnCloseSettings: document.getElementById('btn-close-settings'),
+    btnTrash: document.getElementById('btn-trash'),
+    btnSave: document.getElementById('btn-save')
+};
+
+// --- Initialization ---
+
+function init() {
+    window.addEventListener('resize', () => {
+        state.isDevicePortrait = window.innerHeight > window.innerWidth;
+        updateUI();
+    });
+
+    renderSettingsUI();
+    setupEventListeners();
+    startCamera();
+    updateUI();
+}
+
+function setupEventListeners() {
+    els.btnFlash.onclick = toggleFlash;
+    els.btnSettings.onclick = toggleSettings;
+    els.btnCloseSettings.onclick = toggleSettings;
+    els.btnFlip.onclick = toggleCamera;
+    els.btnTrash.onclick = retake;
+    els.btnSave.onclick = download;
+    els.btnStopLock.onclick = stopRecording;
+
+    // Shutter interactions
+    const start = (e) => startPress(e);
+    const end = (e) => endPress(e);
+    const move = (e) => handleTouchMove(e);
+
+    els.btnShutter.addEventListener('mousedown', start);
+    els.btnShutter.addEventListener('touchstart', start);
+    
+    els.btnShutter.addEventListener('mouseup', end);
+    els.btnShutter.addEventListener('mouseleave', end);
+    els.btnShutter.addEventListener('touchend', end);
+    
+    els.btnShutter.addEventListener('touchmove', move);
+}
+
+// --- Logic Methods ---
+
+async function startCamera() {
+    state.hasError = null;
+    updateUI();
+
+    const resolutionConstraints = getConstraintsForResolution(state.settings.sourceResolution);
+    const constraints = {
+        video: {
+            ...resolutionConstraints,
+            facingMode: { ideal: state.cameraFacing },
+            frameRate: { ideal: 30 }
+        },
+        audio: true
+    };
+
+    try {
+        const stream = await navigator.mediaDevices.getUserMedia(constraints);
+        initStream(stream);
+    } catch (err) {
+        console.warn('Initial camera constraint failed', err);
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({
+                video: { ...resolutionConstraints },
+                audio: true
+            });
+            initStream(stream);
+        } catch (videoErr) {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+                initStream(stream);
+            } catch (finalErr) {
+                console.error('Camera failed', finalErr);
+                state.hasError = 'CAMERA MALFUNCTION';
+                updateUI();
+            }
+        }
+    }
+}
+
+function initStream(stream) {
+    state.streamActive = true;
+    
+    const audioTracks = stream.getAudioTracks();
+    if (audioTracks.length > 0) {
+        audioStream = new MediaStream(audioTracks);
+    }
+
+    els.video.srcObject = stream;
+    
+    const track = stream.getVideoTracks()[0];
+    if (track) {
+        const s = track.getSettings();
+        if (s.facingMode && (s.facingMode === 'user' || s.facingMode === 'environment')) {
+            // state.cameraFacing = s.facingMode;
+        }
+    }
+
+    els.video.onloadedmetadata = () => {
+        els.video.play().catch(e => console.error('Play error', e));
+        startProcessingLoop();
+    };
+    updateUI();
+}
+
+function stopCamera() {
+    if (els.video.srcObject) {
+        els.video.srcObject.getTracks().forEach(track => track.stop());
+    }
+    state.streamActive = false;
+}
+
+function toggleCamera() {
+    state.cameraFacing = state.cameraFacing === 'environment' ? 'user' : 'environment';
+    stopCamera();
+    setTimeout(startCamera, 100);
+}
+
+function toggleFlash() {
+    const modes = ['auto', 'on', 'off'];
+    const idx = modes.indexOf(state.flashMode);
+    state.flashMode = modes[(idx + 1) % modes.length];
+    updateUI();
+}
+
+function getConstraintsForResolution(res) {
+    switch (res) {
+        case '480p': return { width: { ideal: 640 }, height: { ideal: 480 } };
+        case '720p': return { width: { ideal: 1280 }, height: { ideal: 720 } };
+        case '1080p': return { width: { ideal: 1920 }, height: { ideal: 1080 } };
+        default: return { width: { ideal: 1280 }, height: { ideal: 720 } };
+    }
+}
+
+// --- Frame Processing ---
+
+function startProcessingLoop() {
+    if (animationFrameId) cancelAnimationFrame(animationFrameId);
+
+    const loop = (timestamp) => {
+        const currentFPS = state.settings.fps;
+        const frameInterval = 1000 / currentFPS;
+        const elapsed = timestamp - lastFrameTime;
+
+        if (!state.capturedImage && !state.capturedVideo && els.video.readyState >= 2) {
+            if (elapsed > frameInterval) {
+                lastFrameTime = timestamp - (elapsed % frameInterval);
+                processFrame();
+            }
+        }
+        animationFrameId = requestAnimationFrame(loop);
+    };
+    animationFrameId = requestAnimationFrame(loop);
+}
+
+function calculateTargetDimensions() {
+    const s = state.settings;
+    const [aspectW, aspectH] = s.aspectRatio.split(':').map(Number);
+    let ratio = aspectW / aspectH;
+    
+    let isPortrait = s.orientation === 'auto' ? state.isDevicePortrait : s.orientation === 'portrait';
+
+    if (isPortrait && ratio > 1) ratio = 1 / ratio;
+    else if (!isPortrait && ratio < 1) ratio = 1 / ratio;
+
+    let w, h;
+    if (ratio >= 1) {
+        w = s.quality;
+        h = Math.round(s.quality / ratio);
+    } else {
+        h = s.quality;
+        w = Math.round(s.quality * ratio);
+    }
+
+    return { 
+        width: Math.floor(w / 2) * 2, 
+        height: Math.floor(h / 2) * 2 
+    };
+}
+
+function resizeBuffer(src, sw, sh, dw, dh) {
+    const dst = new Uint8ClampedArray(dw * dh * 4);
+    for (let y = 0; y < dh; y++) {
+        const sy = Math.floor(y * sh / dh);
+        for (let x = 0; x < dw; x++) {
+            const sx = Math.floor(x * sw / dw);
+            const sIdx = (sy * sw + sx) * 4;
+            const dIdx = (y * dw + x) * 4;
+            dst[dIdx] = src[sIdx];
+            dst[dIdx+1] = src[sIdx+1];
+            dst[dIdx+2] = src[sIdx+2];
+            dst[dIdx+3] = src[sIdx+3];
+        }
+    }
+    return dst;
+}
+
+function processFrame() {
+    const video = els.video;
+    const canvas = els.canvas;
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    const s = state.settings;
+
+    const { width: renderW, height: renderH } = calculateTargetDimensions();
+
+    if (canvas.width !== renderW || canvas.height !== renderH) {
+        if (previousRawFrameData && lastRenderWidth > 0) {
+            previousRawFrameData = resizeBuffer(previousRawFrameData, lastRenderWidth, lastRenderHeight, renderW, renderH);
+        } else {
+            previousRawFrameData = null;
+        }
+        canvas.width = renderW;
+        canvas.height = renderH;
+        lastRenderWidth = renderW;
+        lastRenderHeight = renderH;
+        // Keep UI aspect ratio in sync
+        updateViewfinderAspect(s.aspectRatio, s.orientation);
+    }
+
+    const vw = video.videoWidth;
+    const vh = video.videoHeight;
+    const sourceAspect = vw / vh;
+    const targetAspect = renderW / renderH;
+
+    let cropW = vw, cropH = vh;
+
+    if (targetAspect > sourceAspect) {
+        cropH = vw / targetAspect;
+    } else {
+        cropW = vh * targetAspect;
+    }
+
+    cropW /= s.zoom;
+    cropH /= s.zoom;
+
+    const cropX = (vw - cropW) / 2;
+    const cropY = (vh - cropH) / 2;
+
+    ctx.filter = 'none';
+    ctx.imageSmoothingEnabled = true;
+
+    if (state.cameraFacing === 'user') {
+        ctx.save();
+        ctx.scale(-1, 1);
+        ctx.drawImage(video, cropX, cropY, cropW, cropH, -renderW, 0, renderW, renderH);
+        ctx.restore();
+    } else {
+        ctx.drawImage(video, cropX, cropY, cropW, cropH, 0, 0, renderW, renderH);
+    }
+
+    const rawImageData = ctx.getImageData(0, 0, renderW, renderH);
+    const rawData = rawImageData.data;
+
+    // --- Analysis ---
+    let totalR=0, totalG=0, totalB=0;
+    let cornerSignificantDiffs = 0, cornerPixelCount = 0;
+    const sampleStride = 4;
+    const cornerMarginX = Math.floor(renderW * 0.2);
+    const cornerMarginY = Math.floor(renderH * 0.2);
+
+    for (let i = 0; i < rawData.length; i += 4 * sampleStride) {
+        const r = rawData[i], g = rawData[i+1], b = rawData[i+2];
+        totalR += r; totalG += g; totalB += b;
+
+        const pIndex = i/4;
+        const x = pIndex % renderW;
+        const y = Math.floor(pIndex / renderW);
+
+        const isCorner = (x < cornerMarginX || x > renderW - cornerMarginX) && (y < cornerMarginY || y > renderH - cornerMarginY);
+        
+        if (isCorner && previousRawFrameData && previousRawFrameData.length === rawData.length) {
+            cornerPixelCount++;
+            const pr = previousRawFrameData[i], pg = previousRawFrameData[i+1], pb = previousRawFrameData[i+2];
+            if (Math.abs(r-pr) + Math.abs(g-pg) + Math.abs(b-pb) > 50) {
+                cornerSignificantDiffs++;
+            }
+        }
+    }
+
+    const cornerMotionRatio = cornerPixelCount > 0 ? (cornerSignificantDiffs / cornerPixelCount) : 0;
+    const totalSamples = rawData.length / (4 * sampleStride);
+    const avgR = totalR/totalSamples, avgG = totalG/totalSamples, avgB = totalB/totalSamples;
+    const tempDiff = (avgR - avgB);
+    state.currentLuma = (0.299*avgR + 0.587*avgG + 0.114*avgB);
+
+    // --- Prepare Render ---
+    let renderImageData;
+    if (s.blur > 0) {
+        ctx.filter = `blur(${s.blur}px)`;
+        if (state.cameraFacing === 'user') {
+            ctx.save();
+            ctx.scale(-1, 1);
+            ctx.drawImage(video, cropX, cropY, cropW, cropH, -renderW, 0, renderW, renderH);
+            ctx.restore();
+        } else {
+            ctx.drawImage(video, cropX, cropY, cropW, cropH, 0, 0, renderW, renderH);
+        }
+        ctx.filter = 'none';
+        renderImageData = ctx.getImageData(0, 0, renderW, renderH);
+    } else {
+        renderImageData = rawImageData;
+    }
+    const renderData = renderImageData.data;
+    const currentRawFrameSnapshot = new Uint8ClampedArray(rawData);
+
+    // --- Effects ---
+    if (cornerMotionRatio > s.motionThreshold) {
+        jitterSustain = 4;
+    }
+    let jitterX = 0, jitterY = 0;
+    if (jitterSustain > 0) {
+        const maxJitter = s.jitterIntensity;
+        const intensity = Math.min(maxJitter, Math.max(2, cornerMotionRatio * maxJitter * 2));
+        jitterX = Math.floor((Math.random() - 0.5) * intensity);
+        jitterY = Math.floor((Math.random() - 0.5) * intensity);
+        jitterSustain--;
+    }
+
+    const hueShift = (tempDiff / 255) * s.hueShift;
+    const sourcePixels = new Uint8ClampedArray(renderData);
+
+    // Interlace
+    if (s.interlace > 0 && previousRawFrameData && previousRawFrameData.length === rawData.length) {
+        for (let y = 1; y < renderH; y+=2) {
+            const offset = y * renderW * 4;
+            for (let i = offset; i < offset + renderW*4; i++) {
+                sourcePixels[i] = (sourcePixels[i] * (1-s.interlace)) + (previousRawFrameData[i] * s.interlace);
+            }
+        }
+    }
+
+    // Scanline & Tracking
+    const scanlineFlicker = Math.random() * 0.08;
+    const scanlineBase = 1 - (s.scanlineIntensity * 0.2);
+    const scanlineMult = scanlineBase - (s.scanlineIntensity * scanlineFlicker);
+    
+    const artifactProbability = s.trackingNoise * 0.3;
+    const hasTrackingArtifact = Math.random() < artifactProbability;
+    const trackingY = hasTrackingArtifact ? Math.floor(Math.random() * (renderH - 4)) : -1;
+
+    const doCurvature = Math.abs(s.curvature) > 0.01;
+    const curv = s.curvature;
+    const doSharpen = s.sharpen > 0;
+    const sharpAmt = s.sharpen;
+
+    // Helpers
+    const getSafe = (arr, x, y) => {
+        if (x < 0) x = 0; if (x >= renderW) x = renderW - 1;
+        if (y < 0) y = 0; if (y >= renderH) y = renderH - 1;
+        const idx = (y * renderW + x) * 4;
+        return { r: arr[idx], g: arr[idx+1], b: arr[idx+2] };
+    };
+
+    // Pixel Loop
+    for (let y = 0; y < renderH; y++) {
+        const isTrackingRow = hasTrackingArtifact && y >= trackingY && y < trackingY + 2;
+        const ny = doCurvature ? (y / renderH) * 2 - 1 : 0;
+
+        for (let x = 0; x < renderW; x++) {
+            let sx = x, sy = y;
+            if (doCurvature) {
+                const nx = (x / renderW) * 2 - 1;
+                const r2 = nx*nx + ny*ny;
+                const f = 1 + curv * r2;
+                sx = (nx * f + 1) * 0.5 * renderW;
+                sy = (ny * f + 1) * 0.5 * renderH;
+            }
+            sx += jitterX;
+            sy += jitterY;
+
+            const srcX = Math.floor(sx);
+            const srcY = Math.floor(sy);
+            
+            let r=0, g=0, b=0;
+
+            if (doSharpen) {
+                if (srcX >= 1 && srcX < renderW - 1 && srcY >= 1 && srcY < renderH - 1) {
+                    const cIdx = (srcY * renderW + srcX) * 4;
+                    const tIdx = ((srcY-1) * renderW + srcX) * 4;
+                    const bIdx = ((srcY+1) * renderW + srcX) * 4;
+                    const lIdx = (srcY * renderW + srcX-1) * 4;
+                    const rIdx = (srcY * renderW + srcX+1) * 4;
+
+                    const cr = sourcePixels[cIdx], cg = sourcePixels[cIdx+1], cb = sourcePixels[cIdx+2];
+                    const tr = sourcePixels[tIdx], tg = sourcePixels[tIdx+1], tb = sourcePixels[tIdx+2];
+                    const br = sourcePixels[bIdx], bg = sourcePixels[bIdx+1], bb = sourcePixels[bIdx+2];
+                    const lr = sourcePixels[lIdx], lg = sourcePixels[lIdx+1], lb = sourcePixels[lIdx+2];
+                    const rr = sourcePixels[rIdx], rg = sourcePixels[rIdx+1], rb = sourcePixels[rIdx+2];
+
+                    r = cr*(1+4*sharpAmt) - sharpAmt*(tr+br+lr+rr);
+                    g = cg*(1+4*sharpAmt) - sharpAmt*(tg+bg+lg+rg);
+                    b = cb*(1+4*sharpAmt) - sharpAmt*(tb+bb+lb+rb);
+                } else {
+                    const c = getSafe(sourcePixels, srcX, srcY);
+                    const t = getSafe(sourcePixels, srcX, srcY-1);
+                    const bt = getSafe(sourcePixels, srcX, srcY+1);
+                    const l = getSafe(sourcePixels, srcX-1, srcY);
+                    const rt = getSafe(sourcePixels, srcX+1, srcY);
+                    r = c.r*(1+4*sharpAmt) - sharpAmt*(t.r+bt.r+l.r+rt.r);
+                    g = c.g*(1+4*sharpAmt) - sharpAmt*(t.g+bt.g+l.g+rt.g);
+                    b = c.b*(1+4*sharpAmt) - sharpAmt*(t.b+bt.b+l.b+rt.b);
+                }
+            } else {
+                if (srcX >= 0 && srcX < renderW && srcY >= 0 && srcY < renderH) {
+                    const idx = (srcY * renderW + srcX) * 4;
+                    r = sourcePixels[idx]; g = sourcePixels[idx+1]; b = sourcePixels[idx+2];
+                }
+            }
+
+            // Color FX
+            if (Math.abs(hueShift) > 0.01) {
+                const rN = r/255, gN = g/255, bN = b/255;
+                const cMax = Math.max(rN, gN, bN), cMin = Math.min(rN, gN, bN);
+                const delta = cMax - cMin;
+                let hVal=0, sVal=0, lVal=(cMax+cMin)/2;
+                if (delta !== 0) {
+                    sVal = lVal > 0.5 ? delta/(2-cMax-cMin) : delta/(cMax+cMin);
+                    if (cMax===rN) hVal=(gN-bN)/delta + (gN<bN?6:0);
+                    else if(cMax===gN) hVal=(bN-rN)/delta + 2;
+                    else hVal=(rN-gN)/delta+4;
+                    hVal/=6;
+                }
+                hVal += hueShift;
+                if (hVal<0) hVal+=1; if(hVal>1) hVal-=1;
+                if(sVal!==0) {
+                    const q = lVal<0.5 ? lVal*(1+sVal) : lVal+sVal-lVal*sVal;
+                    const p = 2*lVal-q;
+                    const hue2rgb = (t) => {
+                        if(t<0) t+=1; if(t>1) t-=1;
+                        if(t<1/6) return p+(q-p)*6*t;
+                        if(t<1/2) return q;
+                        if(t<2/3) return p+(q-p)*(2/3-t)*6;
+                        return p;
+                    }
+                    r = hue2rgb(hVal+1/3)*255; g = hue2rgb(hVal)*255; b = hue2rgb(hVal-1/3)*255;
+                }
+            }
+
+            const gray = 0.299*r + 0.587*g + 0.114*b;
+            r = gray + (r-gray)*s.saturation;
+            g = gray + (g-gray)*s.saturation;
+            b = gray + (b-gray)*s.saturation;
+
+            r = (r-128)*s.contrast + 128;
+            g = (g-128)*s.contrast + 128;
+            b = (b-128)*s.contrast + 128;
+
+            r *= s.brightness; g *= s.brightness; b *= s.brightness;
+
+            const noise = (Math.random()-0.5)*s.noise;
+            r+=noise; g+=noise; b+=noise;
+
+            if (s.scanlineIntensity > 0 && y%2===0) {
+                r*=scanlineMult; g*=scanlineMult; b*=scanlineMult;
+            }
+
+            if (isTrackingRow) {
+                r = Math.min(255, r+40);
+                g = Math.min(255, g+40);
+                b = Math.min(255, b+40);
+                const trk = (Math.random()-0.5)*(50+(s.trackingNoise*50));
+                r+=trk; g+=trk; b+=trk;
+            }
+
+            const dIdx = (y*renderW + x)*4;
+            renderData[dIdx] = r;
+            renderData[dIdx+1] = g;
+            renderData[dIdx+2] = b;
+        }
+    }
+
+    ctx.putImageData(renderImageData, 0, 0);
+    previousRawFrameData = currentRawFrameSnapshot;
+}
+
+// --- Interaction Logic ---
+
+function startPress(e) {
+    if (state.showSettings) return;
+    if (e.cancelable) e.preventDefault();
+    if (state.capturedImage || state.capturedVideo) return;
+    
+    state.isLocked = false;
+    updateUI();
+
+    if (e.touches && e.touches.length > 0) {
+        touchStartY = e.touches[0].clientY;
+    }
+
+    pressTimer = setTimeout(startRecording, LONG_PRESS_MS);
+}
+
+function handleTouchMove(e) {
+    if (!state.isRecording || state.isLocked || state.showSettings) return;
+    if (e.touches && e.touches.length > 0) {
+        const diff = touchStartY - e.touches[0].clientY;
+        if (diff > 60) {
+            state.isLocked = true;
+            updateUI();
+        }
+    }
+}
+
+function endPress(e) {
+    if (state.showSettings) return;
+    if (e.cancelable) e.preventDefault();
+    
+    if (pressTimer) {
+        clearTimeout(pressTimer);
+        pressTimer = null;
+    }
+
+    if (state.isRecording) {
+        if (!state.isLocked) stopRecording();
+    } else if (!state.capturedImage && !state.capturedVideo) {
+        capturePhoto();
+    }
+}
+
+function capturePhoto() {
+    if (!state.streamActive) return;
+
+    let shouldFlash = state.flashMode === 'on';
+    if (state.flashMode === 'auto' && state.currentLuma < 80) shouldFlash = true;
+
+    if (shouldFlash) {
+        els.flashOverlay.classList.remove('hidden');
+        setTimeout(() => els.flashOverlay.classList.add('hidden'), 150);
+    }
+
+    const dataUrl = els.canvas.toDataURL('image/jpeg', 0.6);
+    state.capturedImage = dataUrl;
+    state.capturedVideo = null;
+    updateUI();
+}
+
+function startRecording() {
+    if (state.isRecording) return;
+    state.isRecording = true;
+    recordedChunks = [];
+    updateUI();
+
+    const canvasStream = els.canvas.captureStream(state.settings.fps);
+    let finalStream = canvasStream;
+    if (audioStream) {
+        finalStream = new MediaStream([...canvasStream.getVideoTracks(), ...audioStream.getAudioTracks()]);
+    }
+
+    try {
+        mediaRecorder = new MediaRecorder(finalStream, {
+            mimeType: 'video/webm;codecs=vp8,opus',
+            videoBitsPerSecond: 250000
+        });
+    } catch (e) {
+        try {
+            mediaRecorder = new MediaRecorder(finalStream, { videoBitsPerSecond: 250000 });
+        } catch(e2) {
+            state.isRecording = false;
+            return;
+        }
+    }
+
+    mediaRecorder.ondataavailable = (e) => {
+        if (e.data.size > 0) recordedChunks.push(e.data);
+    };
+
+    mediaRecorder.onstop = () => {
+        const blob = new Blob(recordedChunks, { type: 'video/webm' });
+        const url = URL.createObjectURL(blob);
+        state.capturedVideo = url;
+        state.capturedImage = null;
+        state.isRecording = false;
+        state.isLocked = false;
+        updateUI();
+    };
+
+    mediaRecorder.start();
+}
+
+function stopRecording() {
+    if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+        mediaRecorder.stop();
+    }
+}
+
+function retake() {
+    if (state.capturedVideo) URL.revokeObjectURL(state.capturedVideo);
+    state.capturedVideo = null;
+    state.capturedImage = null;
+    updateUI();
+}
+
+function download() {
+    const link = document.createElement('a');
+    if (state.capturedImage) {
+        link.download = `twosies_${Date.now()}.jpg`;
+        link.href = state.capturedImage;
+    } else if (state.capturedVideo) {
+        link.download = `twosies_${Date.now()}.webm`;
+        link.href = state.capturedVideo;
+    } else {
+        return;
+    }
+    link.click();
+    retake();
+}
+
+// --- UI Updates ---
+
+function toggleSettings() {
+    state.showSettings = !state.showSettings;
+    updateUI();
+}
+
+function updateUI() {
+    // Flash
+    els.flashIcon.classList.toggle('text-amber-400', state.flashMode === 'on');
+    els.flashIcon.classList.toggle('text-zinc-600', state.flashMode !== 'on');
+    els.flashOffSlash.classList.toggle('hidden', state.flashMode !== 'off');
+    els.flashAutoText.classList.toggle('hidden', state.flashMode !== 'auto');
+
+    // Settings
+    els.settingsModal.classList.toggle('hidden', !state.showSettings);
+
+    // Viewfinder overlays
+    els.errorDisplay.classList.toggle('hidden', !state.hasError);
+    if (state.hasError) els.errorMessage.textContent = state.hasError;
+
+    els.resultPhoto.classList.toggle('hidden', !state.capturedImage);
+    if (state.capturedImage) els.resultImg.src = state.capturedImage;
+
+    els.resultVideo.classList.toggle('hidden', !state.capturedVideo);
+    if (state.capturedVideo) els.resultVid.src = state.capturedVideo;
+
+    els.canvasContainer.classList.toggle('hidden', !!(state.capturedImage || state.capturedVideo));
+
+    els.recIndicator.classList.toggle('hidden', !state.isRecording);
+    els.recStateText.textContent = state.isLocked ? 'LOCKED' : 'REC';
+
+    els.zoomIndicator.classList.toggle('hidden', state.showSettings || state.capturedImage || state.capturedVideo || state.settings.zoom <= 1.0);
+    els.zoomIndicator.textContent = state.settings.zoom + 'x';
+
+    // Controls
+    if (state.capturedImage || state.capturedVideo) {
+        els.controlsCapture.classList.add('hidden');
+        els.controlsReview.classList.remove('hidden');
+        els.btnFlip.parentElement.classList.add('hidden');
+        els.counterText.textContent = 'MEM';
+    } else {
+        els.controlsCapture.classList.remove('hidden');
+        els.controlsReview.classList.add('hidden');
+        els.btnFlip.parentElement.classList.remove('hidden');
+        els.counterText.textContent = state.isRecording ? (state.isLocked ? 'LCK' : 'REC') : 'RDY';
+        
+        // Shutter Buttons
+        if (state.isLocked) {
+            els.btnStopLock.classList.remove('hidden');
+            els.containerShutter.classList.add('hidden');
+        } else {
+            els.btnStopLock.classList.add('hidden');
+            els.containerShutter.classList.remove('hidden');
+            
+            els.hintLock.classList.toggle('hidden', !state.isRecording);
+            els.shutterOuter.classList.toggle('scale-95', state.isRecording);
+            
+            if (state.isRecording) {
+                els.shutterInner.classList.replace('bg-red-600', 'bg-red-500');
+                els.shutterInner.classList.replace('border-red-800', 'border-red-400');
+                els.shutterInner.classList.add('scale-75');
+            } else {
+                els.shutterInner.classList.replace('bg-red-500', 'bg-red-600');
+                els.shutterInner.classList.replace('border-red-400', 'border-red-800');
+                els.shutterInner.classList.remove('scale-75');
+            }
+        }
+    }
+    
+    if (state.settings.aspectRatio && !state.capturedImage && !state.capturedVideo) {
+        updateViewfinderAspect(state.settings.aspectRatio, state.settings.orientation);
+    }
+}
+
+function updateViewfinderAspect(ratio, orientation) {
+    const list = els.viewfinder.classList;
+    // Remove old aspect classes
+    list.remove('aspect-[4/3]', 'aspect-[16/9]', 'aspect-[1/1]', 'aspect-[3/4]', 'aspect-[9/16]');
+
+    let isPortrait = orientation === 'auto' ? state.isDevicePortrait : orientation === 'portrait';
+
+    if (ratio === '1:1') {
+        list.add('aspect-[1/1]');
+    } else if (ratio === '4:3') {
+        list.add(isPortrait ? 'aspect-[3/4]' : 'aspect-[4/3]');
+    } else if (ratio === '16:9') {
+        list.add(isPortrait ? 'aspect-[9/16]' : 'aspect-[16/9]');
+    }
+}
+
+// --- Settings Generation ---
+
+const SETTING_DEFS = [
+    { key: 'zoom', label: 'DIGITAL ZOOM', type: 'range', min: 1, max: 4, step: 0.1, unit: 'x' },
+    { key: 'aspectRatio', label: 'ASPECT RATIO', type: 'select', options: ['4:3', '16:9', '1:1', '9:16'] },
+    { key: 'orientation', label: 'ORIENTATION', type: 'select', options: ['auto', 'landscape', 'portrait'] },
+    { key: 'sourceResolution', label: 'CAMERA QUALITY', type: 'select', options: ['480p', '720p', '1080p'] },
+    { key: 'quality', label: 'EFFECT RESOLUTION', type: 'range', min: 80, max: 480, step: 20, unit: 'px' },
+    { key: 'fps', label: 'FRAME RATE', type: 'range', min: 1, max: 30, step: 1, unit: ' FPS' },
+    { key: 'curvature', label: 'LENS CURVATURE', type: 'range', min: -0.5, max: 0.5, step: 0.05, unit: '' },
+    { key: 'blur', label: 'SOFTNESS (BLUR)', type: 'range', min: 0, max: 3, step: 0.1, unit: 'px' },
+    { key: 'sharpen', label: 'EDGE ENHANCE', type: 'range', min: 0, max: 3, step: 0.1, unit: 'x' },
+    { key: 'interlace', label: 'TEMPORAL INTERLACE', type: 'range', min: 0, max: 1, step: 0.1, unit: '' },
+    { key: 'jitterIntensity', label: 'SHAKE INTENSITY', type: 'range', min: 0, max: 50, step: 1, unit: 'px' },
+    { key: 'trackingNoise', label: 'TRACKING ARTIFACTS', type: 'range', min: 0, max: 1, step: 0.1, unit: '' },
+    { key: 'scanlineIntensity', label: 'SCANLINES', type: 'range', min: 0, max: 1, step: 0.1, unit: '' },
+    { key: 'motionThreshold', label: 'MOTION SENSITIVITY', type: 'range', min: 0.01, max: 0.5, step: 0.01, unit: '' },
+    { key: 'hueShift', label: 'COLOR TEMP SHIFT', type: 'range', min: 0, max: 2, step: 0.1, unit: 'x' },
+    { key: 'saturation', label: 'SATURATION', type: 'range', min: 0, max: 4, step: 0.1, unit: 'x' },
+    { key: 'brightness', label: 'BRIGHTNESS', type: 'range', min: 0, max: 2, step: 0.1, unit: 'x' },
+    { key: 'contrast', label: 'CONTRAST', type: 'range', min: 0, max: 5, step: 0.1, unit: 'x' },
+    { key: 'noise', label: 'NOISE', type: 'range', min: 0, max: 100, step: 1, unit: '' }
+];
+
+function renderSettingsUI() {
+    const container = els.settingsContainer;
+    container.innerHTML = ''; // Clear
+
+    // Groups could be implemented, but flat list is fine for now
+    SETTING_DEFS.forEach(def => {
+        const div = document.createElement('div');
+        div.className = "flex flex-col gap-2 p-2 border-b border-zinc-800";
+        
+        const labelRow = document.createElement('div');
+        labelRow.className = "flex justify-between text-xs text-zinc-400";
+        
+        const label = document.createElement('span');
+        label.textContent = def.label;
+        labelRow.appendChild(label);
+
+        let input;
+        
+        if (def.type === 'range') {
+            const valSpan = document.createElement('span');
+            valSpan.textContent = state.settings[def.key] + (def.unit || '');
+            labelRow.appendChild(valSpan);
+
+            input = document.createElement('input');
+            input.type = 'range';
+            input.min = def.min; input.max = def.max; input.step = def.step;
+            input.value = state.settings[def.key];
+            input.oninput = (e) => {
+                const val = parseFloat(e.target.value);
+                state.settings[def.key] = val;
+                valSpan.textContent = val + (def.unit || '');
+                updateUI();
+            };
+        } else if (def.type === 'select') {
+             input = document.createElement('select');
+             input.className = "bg-zinc-800 text-zinc-300 text-xs p-1 rounded border border-zinc-600 outline-none";
+             def.options.forEach(opt => {
+                 const o = document.createElement('option');
+                 o.value = opt;
+                 o.textContent = opt.toUpperCase();
+                 input.appendChild(o);
+             });
+             input.value = state.settings[def.key];
+             input.onchange = (e) => {
+                 state.settings[def.key] = e.target.value;
+                 if (def.key === 'sourceResolution') {
+                     if (currentSourceRes !== state.settings.sourceResolution) {
+                        currentSourceRes = state.settings.sourceResolution;
+                        stopCamera();
+                        setTimeout(startCamera, 100);
+                     }
+                 }
+                 updateUI();
+             }
+             labelRow.appendChild(input);
+        }
+
+        div.appendChild(labelRow);
+        if (def.type === 'range') div.appendChild(input);
+
+        container.appendChild(div);
+    });
+
+    // Reset Button
+    const resetBtn = document.createElement('button');
+    resetBtn.className = "w-full py-4 text-xs font-bold tracking-widest text-zinc-500 hover:text-red-500 border border-zinc-800 hover:border-red-900/50 hover:bg-red-900/10 transition-all uppercase mt-4";
+    resetBtn.textContent = "RESET TO DEFAULTS";
+    resetBtn.onclick = () => {
+        state.settings = { ...DEFAULT_SETTINGS };
+        renderSettingsUI();
+        updateUI();
+    };
+    container.appendChild(resetBtn);
+}
+
+// Start app
+init();

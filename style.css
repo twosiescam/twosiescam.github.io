@@ -1,0 +1,61 @@
+
+/* Custom Scrollbar for that 90s feel */
+::-webkit-scrollbar {
+    width: 12px;
+}
+::-webkit-scrollbar-track {
+    background: #1a1a1a; 
+}
+::-webkit-scrollbar-thumb {
+    background: #555; 
+    border: 2px solid #1a1a1a;
+}
+
+/* Disable selection for app-like feel */
+body {
+    user-select: none;
+    -webkit-user-select: none;
+    background-color: #050505;
+    color: #e0e0e0;
+}
+
+/* Force hard edges for that low-res digital look */
+.pixelated {
+    image-rendering: -moz-crisp-edges;
+    image-rendering: -webkit-crisp-edges;
+    image-rendering: pixelated;
+    image-rendering: crisp-edges;
+}
+
+.tap-highlight-transparent {
+    -webkit-tap-highlight-color: transparent;
+}
+
+@keyframes blink {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0; }
+}
+.animate-blink {
+    animation: blink 1s infinite;
+}
+
+/* Slider Styling */
+input[type=range] {
+    -webkit-appearance: none; 
+    background: transparent; 
+}
+input[type=range]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    height: 16px;
+    width: 16px;
+    border-radius: 0;
+    background: #eab308; /* amber-500 */
+    cursor: pointer;
+    margin-top: -6px; 
+}
+input[type=range]::-webkit-slider-runnable-track {
+    width: 100%;
+    height: 4px;
+    cursor: pointer;
+    background: #3f3f46; /* zinc-700 */
+}
