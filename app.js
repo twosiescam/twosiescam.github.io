@@ -572,6 +572,9 @@ function startPress(e) {
     if (e.cancelable) e.preventDefault();
     if (state.capturedImage || state.capturedVideo) return;
     
+    // Stop propagation to avoid any global listeners
+    e.stopPropagation();
+
     state.isLocked = false;
     updateUI();
 
@@ -596,7 +599,41 @@ function handleTouchMove(e) {
 function endPress(e) {
     if (state.showSettings) return;
     if (e.cancelable) e.preventDefault();
+    e.stopPropagation();
+
+    // Cancel logic: if mouse leaves the button, or touch ends outside button
+    let isCancel = false;
+
+    if (e.type === 'mouseleave') {
+        isCancel = true;
+    } else if (e.type === 'touchend') {
+        if (e.changedTouches && e.changedTouches.length > 0) {
+            const touch = e.changedTouches[0];
+            const elem = document.elementFromPoint(touch.clientX, touch.clientY);
+            // If the element under the finger is not the button or inside it, it's a cancel
+            if (!els.btnShutter.contains(elem)) {
+                isCancel = true;
+            }
+        }
+    }
     
+    if (isCancel) {
+        if (pressTimer) {
+            clearTimeout(pressTimer);
+            pressTimer = null;
+        }
+        if (state.isRecording && !state.isLocked) {
+             stopRecording();
+             // Discard the recording if it was a cancel? 
+             // Logic: If user was holding (recording) and slid off, we usually stop.
+             // But if they didn't lock, maybe we just keep the video?
+             // Actually, usually sliding off a button cancels the action.
+             // For video, stopping is the action.
+        }
+        // Do not trigger capturePhoto
+        return;
+    }
+
     if (pressTimer) {
         clearTimeout(pressTimer);
         pressTimer = null;
