@@ -457,6 +457,9 @@ function setupAudioGraph(inStream) {
     const bufferSize = audioCtx.sampleRate * 2;
     const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
     const data = buffer.getChannelData(0);
+    
+    let lastOut = 0; // Initialize before loop
+
     // Pink-ish noise approximation
     for (let i = 0; i < bufferSize; i++) {
         const white = Math.random() * 2 - 1;
@@ -464,7 +467,6 @@ function setupAudioGraph(inStream) {
         lastOut = data[i];
         data[i] *= 3.5; // Compensate gain
     }
-    let lastOut = 0;
     
     hissNode = audioCtx.createBufferSource();
     hissNode.buffer = buffer;
