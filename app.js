@@ -19,7 +19,8 @@ const DEFAULT_SETTINGS = {
     zoom: 1.0,
     aspectRatio: '4:3',
     orientation: 'auto',
-    sourceResolution: '720p'
+    sourceResolution: '720p',
+    autoSave: 'off'
 };
 
 // Application State
@@ -695,9 +696,23 @@ function capturePhoto() {
     }
 
     const dataUrl = els.canvas.toDataURL('image/jpeg', 0.6);
-    state.capturedImage = dataUrl;
-    state.capturedVideo = null;
-    updateUI();
+
+    if (state.settings.autoSave === 'on') {
+        // Auto Save mode
+        saveMedia(dataUrl, 'image').then(() => {
+            // Optional: flash UI or indicator
+            const prevText = els.counterText.textContent;
+            els.counterText.textContent = "SAVED";
+            setTimeout(() => {
+                els.counterText.textContent = "RDY";
+            }, 1000);
+        });
+    } else {
+        // Review mode
+        state.capturedImage = dataUrl;
+        state.capturedVideo = null;
+        updateUI();
+    }
 }
 
 function startRecording() {
@@ -733,11 +748,25 @@ function startRecording() {
     mediaRecorder.onstop = () => {
         const blob = new Blob(recordedChunks, { type: 'video/webm' });
         const url = URL.createObjectURL(blob);
-        state.capturedVideo = url;
-        state.capturedImage = null;
-        state.isRecording = false;
-        state.isLocked = false;
-        updateUI();
+        
+        if (state.settings.autoSave === 'on') {
+            saveMedia(url, 'video').then(() => {
+                 state.isRecording = false;
+                 state.isLocked = false;
+                 els.counterText.textContent = "SAVED";
+                 setTimeout(() => {
+                    els.counterText.textContent = "RDY";
+                    URL.revokeObjectURL(url);
+                 }, 1000);
+                 updateUI();
+            });
+        } else {
+            state.capturedVideo = url;
+            state.capturedImage = null;
+            state.isRecording = false;
+            state.isLocked = false;
+            updateUI();
+        }
     };
 
     mediaRecorder.start();
@@ -756,19 +785,54 @@ function retake() {
     updateUI();
 }
 
-function download() {
-    const link = document.createElement('a');
+async function download() {
     if (state.capturedImage) {
-        link.download = `twosies_${Date.now()}.jpg`;
-        link.href = state.capturedImage;
+        await saveMedia(state.capturedImage, 'image');
+        retake();
     } else if (state.capturedVideo) {
-        link.download = `twosies_${Date.now()}.webm`;
-        link.href = state.capturedVideo;
-    } else {
-        return;
+        await saveMedia(state.capturedVideo, 'video');
+        retake();
     }
-    link.click();
-    retake();
+}
+
+async function saveMedia(url, type) {
+    const ext = type === 'image' ? 'jpg' : 'webm';
+    const filename = `twosies_${Date.now()}.${ext}`;
+
+    try {
+        // Try Share API for mobile (iOS Safari/Android)
+        if (navigator.canShare && navigator.share) {
+             const blob = await (await fetch(url)).blob();
+             const file = new File([blob], filename, { type: blob.type });
+             if (navigator.canShare({ files: [file] })) {
+                 await navigator.share({
+                     files: [file],
+                     // Title/Text often ignored when sharing files but good practice
+                     title: 'Twosies Capture', 
+                 });
+                 return; // Shared successfully
+             }
+        }
+        
+        // Fallback for Desktop or unsupported Share API
+        const link = document.createElement('a');
+        link.download = filename;
+        link.href = url;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+    } catch (e) {
+        // AbortError is common if user cancels share sheet
+        if (e.name !== 'AbortError') {
+             console.error('Save failed, trying fallback', e);
+             const link = document.createElement('a');
+             link.download = filename;
+             link.href = url;
+             document.body.appendChild(link);
+             link.click();
+             document.body.removeChild(link);
+        }
+    }
 }
 
 // --- UI Updates ---
@@ -816,7 +880,11 @@ function updateUI() {
         els.controlsCapture.classList.remove('hidden');
         els.controlsReview.classList.add('hidden');
         els.btnFlip.parentElement.classList.remove('hidden');
-        els.counterText.textContent = state.isRecording ? (state.isLocked ? 'LCK' : 'REC') : 'RDY';
+        if (state.isRecording) {
+            els.counterText.textContent = state.isLocked ? 'LCK' : 'REC';
+        } else if (els.counterText.textContent !== 'SAVED') {
+            els.counterText.textContent = 'RDY';
+        }
         
         // Shutter Buttons
         if (state.isLocked) {
@@ -856,6 +924,7 @@ function updateViewfinderAspect(ratio, orientation) {
 // --- Settings Generation ---
 
 const SETTING_DEFS = [
+    { key: 'autoSave', label: 'AUTO SAVE TO DEVICE', type: 'select', options: ['off', 'on'] },
     { key: 'zoom', label: 'DIGITAL ZOOM', type: 'range', min: 1, max: 4, step: 0.1, unit: 'x' },
     { key: 'aspectRatio', label: 'ASPECT RATIO', type: 'select', options: ['4:3', '16:9', '1:1', '9:16'] },
     { key: 'orientation', label: 'ORIENTATION', type: 'select', options: ['auto', 'landscape', 'portrait'] },
