@@ -1,5 +1,3 @@
-
-
 // Default Settings
 const DEFAULT_SETTINGS = {
     fps: 12,
@@ -21,7 +19,8 @@ const DEFAULT_SETTINGS = {
     aspectRatio: '4:3',
     orientation: 'auto',
     sourceResolution: '480p',
-    autoSave: 'off'
+    autoSave: 'off',
+    saveMode: 'auto'
 };
 
 // Application State
@@ -1067,40 +1066,58 @@ async function download() {
 async function saveMedia(url, type) {
     const ext = type === 'image' ? 'jpg' : 'webm';
     const filename = `twosies_${Date.now()}.${ext}`;
+    const mode = state.settings.saveMode || 'auto';
+
+    const triggerDownload = () => {
+         const link = document.createElement('a');
+         link.download = filename;
+         link.href = url;
+         document.body.appendChild(link);
+         link.click();
+         document.body.removeChild(link);
+    };
 
     try {
-        // Try Share API for mobile (iOS Safari/Android)
-        if (navigator.canShare && navigator.share) {
-             const blob = await (await fetch(url)).blob();
-             const file = new File([blob], filename, { type: blob.type });
-             if (navigator.canShare({ files: [file] })) {
-                 await navigator.share({
-                     files: [file],
-                     // Title/Text often ignored when sharing files but good practice
-                     title: 'Twosies Capture', 
-                 });
-                 return; // Shared successfully
-             }
+        // Force Download
+        if (mode === 'download') {
+            triggerDownload();
+            return;
         }
-        
-        // Fallback for Desktop or unsupported Share API
-        const link = document.createElement('a');
-        link.download = filename;
-        link.href = url;
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
+
+        // Check availability for Share
+        let canShare = false;
+        try {
+            if (navigator.canShare && navigator.share) {
+                canShare = true;
+            }
+        } catch(e) { canShare = false; }
+
+        if (!canShare) {
+            // If we can't share, fallback to download immediately
+            triggerDownload();
+            return;
+        }
+
+        // Attempt Share
+        const blob = await (await fetch(url)).blob();
+        const file = new File([blob], filename, { type: blob.type });
+
+        if (navigator.canShare({ files: [file] })) {
+             await navigator.share({
+                 files: [file],
+                 title: 'Twosies Capture', 
+             });
+             // If share promise resolves, it was successful
+        } else {
+             // Fallback if specific file content isn't shareable
+             triggerDownload();
+        }
     } catch (e) {
-        // AbortError is common if user cancels share sheet
-        if (e.name !== 'AbortError') {
-             console.error('Save failed, trying fallback', e);
-             const link = document.createElement('a');
-             link.download = filename;
-             link.href = url;
-             document.body.appendChild(link);
-             link.click();
-             document.body.removeChild(link);
-        }
+        // AbortError happens when user dismisses the share sheet
+        if (e.name === 'AbortError') return;
+        
+        console.error('Save failed, trying fallback', e);
+        triggerDownload();
     }
 }
 
@@ -1200,6 +1217,7 @@ function updateViewfinderAspect(ratio, orientation) {
 
 const SETTING_DEFS = [
     { key: 'autoSave', label: 'AUTO SAVE TO DEVICE', type: 'select', options: ['off', 'on'] },
+    { key: 'saveMode', label: 'SAVE ACTION', type: 'select', options: ['auto', 'share', 'download'] },
     { key: 'zoom', label: 'DIGITAL ZOOM', type: 'range', min: 1, max: 4, step: 0.1, unit: 'x' },
     { key: 'aspectRatio', label: 'ASPECT RATIO', type: 'select', options: ['4:3', '16:9', '1:1', '9:16'] },
     { key: 'orientation', label: 'ORIENTATION', type: 'select', options: ['auto', 'landscape', 'portrait'] },
@@ -1314,3 +1332,4 @@ function renderSettingsUI() {
 
 // Start app
 init();
+   
