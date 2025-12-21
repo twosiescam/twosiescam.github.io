@@ -20,7 +20,7 @@ const DEFAULT_SETTINGS = {
     zoom: 1.0,
     aspectRatio: '4:3',
     orientation: 'auto',
-    sourceResolution: '720p',
+    sourceResolution: '480p',
     autoSave: 'off'
 };
 
