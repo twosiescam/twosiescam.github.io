@@ -101,7 +101,7 @@ body {
     cursor: pointer;
     transition: color 0.2s;
 }
-.btn-icon:hover { color: var(--c-white); }
+.btn-icon:active { color: var(--c-white); }
 .btn-icon svg { display: block; }
 
 .btn-flash { left: 1rem; display: flex; align-items: center; gap: 0.25rem; }
@@ -131,7 +131,7 @@ body {
     padding: 0.5rem 1rem; border: 1px solid var(--c-zinc-700); 
     background: transparent; border-radius: 0.25rem; cursor: pointer;
 }
-.btn-close:hover { color: var(--c-white); border-color: var(--c-zinc-500); }
+.btn-close:active { color: var(--c-white); border-color: var(--c-zinc-500); }
 
 .settings-list { display: grid; gap: 1.5rem; max-width: 28rem; margin: 0 auto; width: 100%; padding-bottom: 5rem; }
 
@@ -160,7 +160,7 @@ body {
     text-transform: uppercase;
     transition: all 0.2s;
 }
-.btn-reset:hover {
+.btn-reset:active {
     color: var(--c-red-500);
     border-color: var(--c-red-dim);
     background-color: rgba(127, 29, 29, 0.1);
@@ -326,7 +326,7 @@ body {
     color: var(--c-zinc-400);
     border: 1px solid var(--c-zinc-700);
 }
-.btn-trash:hover { color: var(--c-white); background-color: var(--c-zinc-800); }
+.btn-trash:active { color: var(--c-white); background-color: var(--c-zinc-800); }
 
 .btn-save {
     background-color: var(--c-amber-600);
@@ -334,7 +334,7 @@ body {
     border: 1px solid var(--c-amber-500);
     box-shadow: 0 10px 15px -3px var(--c-amber-900-dim);
 }
-.btn-save:hover { background-color: var(--c-amber-500); }
+.btn-save:active { background-color: var(--c-amber-500); }
 
 .flip-wrapper { width: 4rem; display: flex; justify-content: center; }
 .btn-flip {
@@ -342,7 +342,7 @@ body {
     background: none; border: none; cursor: pointer;
     transition: color 0.2s;
 }
-.btn-flip:hover { color: var(--c-zinc-300); }
+.btn-flip:active { color: var(--c-zinc-300); }
 
 /* Color States */
 .color-amber { color: var(--c-amber-400); }
