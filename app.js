@@ -1102,7 +1102,7 @@ function processFrame() {
 
         ctx.save();
         const fontSize = Math.max(12, Math.floor(renderH * 0.05));
-        ctx.font = `${fontSize}px "VCR", monospace`; 
+        ctx.font = `${fontSize}px "VCR OSD MONO", monospace`; 
         ctx.textBaseline = 'bottom';
         ctx.textAlign = 'right';
         const padX = renderW * 0.05;
