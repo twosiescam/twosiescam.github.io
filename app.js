@@ -26,10 +26,10 @@ const DEFAULT_SETTINGS = {
     audioDistortion: 0.3,
     colorDepth: 50,
     lensFringe: 2.0,
-    vignette: 0.4,
-    colorBleed: 15,
-    vertRoll: 0.2,
-    lensDamage: 0.3,
+    vignette: 0.2,
+    colorBleed: 5,
+    vertRoll: 0.0,
+    lensDamage: 0.1,
     dateStamp: 'off'
 };
 
