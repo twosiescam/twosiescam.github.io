@@ -25,11 +25,12 @@ const DEFAULT_SETTINGS = {
     audioHiss: 0.2,
     audioDistortion: 0.3,
     colorDepth: 50,
-    lensFringe: 2.0,
+    lensFringe: 0.0,
     vignette: 0.2,
-    colorBleed: 5,
+    colorBleed: 2,
     vertRoll: 0.0,
     lensDamage: 0.1,
+    hWave: 0,
     dateStamp: 'off'
 };
 
@@ -51,7 +52,8 @@ const state = {
     flashActiveFrame: false, // triggers whiteout in processFrame
     rollOffset: 0,         // Current vertical pixel offset
     damageCanvas: null,    // Offscreen canvas for unique dust
-    uniqueSeed: null       // User's unique hash
+    uniqueSeed: null,      // User's unique hash
+    waveTimer: 0
 };
 
 // Internal Logic Variables
@@ -671,6 +673,7 @@ function processFrame() {
         canvas.height = renderH;
         lastRenderWidth = renderW;
         lastRenderHeight = renderH;
+        
         updateViewfinderAspect(s.aspectRatio, s.orientation);
         
         // Regenerate damage map if resolution changed
@@ -809,6 +812,27 @@ function processFrame() {
         }
     }
 
+    const hWaveScanlineOffsets = new Float32Array(renderH);
+    if (s.hWave > 0) {
+        state.waveTimer += 0.2; // Animation speed
+        
+        for (let i = 0; i < renderH; i++) {
+            // Generator 1: High frequency sine (Tearing)
+            const w1 = Math.sin(i * 0.5 + state.waveTimer);
+            
+            // Generator 2: Lower frequency (Wobble)
+            const w2 = Math.sin(i * 0.05 - state.waveTimer * 0.5);
+            
+            // "Square" shaping (Hard edges like the screenshot)
+            const shape = (w1 + w2) > 0 ? 1 : -1;
+            
+            // Jitter: Add random noise to the amplitude
+            const jitter = (Math.random() - 0.5) * 0.5;
+            
+            hWaveScanlineOffsets[i] = (shape + jitter) * s.hWave;
+        }
+    }
+
     // Scanline & Tracking
     const scanlineFlicker = Math.random() * 0.08;
     const scanlineBase = 1 - (s.scanlineIntensity * 0.2);
@@ -831,7 +855,7 @@ function processFrame() {
         return { r: arr[idx], g: arr[idx+1], b: arr[idx+2] };
     };
     
-// Update Vertical Roll State
+    // Update Vertical Roll State
     if (s.vertRoll > 0) {
         state.rollOffset = (state.rollOffset || 0) + (renderH * s.vertRoll * 0.1); 
         if (state.rollOffset > renderH) state.rollOffset -= renderH;
@@ -849,6 +873,8 @@ function processFrame() {
         // 2. Sync Bar: Create a dark band at the rolling seam
         const isSyncBar = s.vertRoll > 0 && vRollSy > renderH - (renderH * 0.05);
 
+        const waveOffsetX = s.hWave > 0 ? hWaveScanlineOffsets[y] : 0;
+
         // 3. Tracking Artifacts (Calculated on the rolled Y)
         const isTrackingRow = hasTrackingArtifact && vRollSy >= trackingY && vRollSy < trackingY + 2;
         
@@ -865,6 +891,7 @@ function processFrame() {
                 sx = (nx * f + 1) * 0.5 * renderW;
                 sy = (ny * f + 1) * 0.5 * renderH;
             }
+            sx += waveOffsetX; 
             sx += jitterX;
             sy += jitterY;
 
@@ -1511,6 +1538,7 @@ const SETTING_DEFS = [
     { key: 'bloom', label: 'LIGHT BLOOM', type: 'range', min: 0, max: 1, step: 0.1, unit: '' },
     { key: 'blur', label: 'SOFTNESS (BLUR)', type: 'range', min: 0, max: 3, step: 0.1, unit: 'px' },
     { key: 'sharpen', label: 'EDGE ENHANCE', type: 'range', min: 0, max: 3, step: 0.1, unit: 'x' },
+    { key: 'hWave', label: 'H-WAVE DISTORTION', type: 'range', min: 0, max: 50, step: 1, unit: 'px' },
     { key: 'interlace', label: 'TEMPORAL INTERLACE', type: 'range', min: 0, max: 1, step: 0.1, unit: '' },
     { key: 'jitterIntensity', label: 'SHAKE INTENSITY', type: 'range', min: 0, max: 50, step: 1, unit: 'px' },
     { key: 'motionThreshold', label: 'MOTION SENSITIVITY', type: 'range', min: 0.01, max: 0.5, step: 0.01, unit: '' },
