@@ -24,7 +24,7 @@ const DEFAULT_SETTINGS = {
     saveMode: 'auto',
     audioHiss: 0.2,
     audioDistortion: 0.3,
-    colorDepth: 128 // 256 = full color, lower = more banding
+    colorDepth: 6
 };
 
 // Application State
@@ -749,12 +749,13 @@ function processFrame() {
     const renderData = renderImageData.data;
     const currentRawFrameSnapshot = new Uint8ClampedArray(rawData);
 
-    const depth = Math.floor(s.colorDepth);
-    const useBanding = depth < 256;
+    const bits = Math.floor(s.colorDepth);
+    const useBanding = bits < 8; // Skip if 8-bit (standard) or higher
     const colorLUT = new Uint8Array(256);
     
     if (useBanding) {
-        const valStep = 255 / (depth - 1);
+        const levels = Math.pow(2, bits);
+        const valStep = 255 / (levels - 1);
         for(let i=0; i<256; i++) {
             colorLUT[i] = Math.round(Math.round(i / valStep) * valStep);
         }
@@ -1383,7 +1384,7 @@ const SETTING_DEFS = [
     { key: 'scanlineIntensity', label: 'SCANLINES', type: 'range', min: 0, max: 1, step: 0.1, unit: '' },
     { key: 'motionThreshold', label: 'MOTION SENSITIVITY', type: 'range', min: 0.01, max: 0.5, step: 0.01, unit: '' },
     { key: 'hueShift', label: 'COLOR TEMP SHIFT', type: 'range', min: 0, max: 2, step: 0.1, unit: 'x' },
-    { key: 'colorDepth', label: 'COLOR DEPTH', type: 'range', min: 2, max: 256, step: 1, unit: ' Lv' },
+    { key: 'colorDepth', label: 'COLOR BIT DEPTH', type: 'range', min: 1, max: 8, step: 1, unit: ' bit' },
     { key: 'saturation', label: 'SATURATION', type: 'range', min: 0, max: 4, step: 0.1, unit: 'x' },
     { key: 'brightness', label: 'BRIGHTNESS', type: 'range', min: 0, max: 2, step: 0.1, unit: 'x' },
     { key: 'contrast', label: 'CONTRAST', type: 'range', min: 0, max: 5, step: 0.1, unit: 'x' },
