@@ -898,10 +898,15 @@ function processFrame() {
                 const rX = Math.floor(sx - fringe); // Red shifts left
                 const bX = Math.floor(sx + fringe); // Blue shifts right
 
-                // Overwrite Red and Blue with the raw (unsharpened) offset pixel
-                // Keeping 'g' as the sharpened center pixel creates a realistic lens effect
-                r = getPx(rX, srcY, 0);
-                b = getPx(bX, srcY, 2);
+                // Get offset colors
+                const rOff = getPx(rX, srcY, 0);
+                const bOff = getPx(bX, srcY, 2);
+
+                // This creates a semi-transparent ghosting effect typical of cheap lenses
+                const fOp = 0.2; 
+                
+                r = r * (1 - fOp) + rOff * fOp;
+                b = b * (1 - fOp) + bOff * fOp;
             }
 
             // --- Post Processing ---
