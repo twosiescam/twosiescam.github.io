@@ -27,6 +27,9 @@ const DEFAULT_SETTINGS = {
     colorDepth: 50,
     lensFringe: 2.0,
     vignette: 0.4,
+    colorBleed: 15,
+    vertRoll: 0.2,
+    lensDamage: 0.3,
     dateStamp: 'off'
 };
 
@@ -45,7 +48,10 @@ const state = {
     isDevicePortrait: true, // Will be updated in init
     settings: { ...DEFAULT_SETTINGS },
     currentLuma: 0,
-    flashActiveFrame: false // triggers whiteout in processFrame
+    flashActiveFrame: false, // triggers whiteout in processFrame
+    rollOffset: 0,         // Current vertical pixel offset
+    damageCanvas: null,    // Offscreen canvas for unique dust
+    uniqueSeed: null       // User's unique hash
 };
 
 // Internal Logic Variables
@@ -521,11 +527,13 @@ function initStream(stream) {
 
 function stopCamera(stopAudio = true) {
     if (els.video.srcObject) {
-        els.video.srcObject.getVideoTracks().forEach(track => track.stop());
-        if (stopAudio) {
-            els.video.srcObject.getAudioTracks().forEach(track => track.stop());
-        }
+        const tracks = els.video.srcObject.getTracks();
+        tracks.forEach(track => {
+            track.stop(); // Hardware release
+        });
+        els.video.srcObject = null; // DOM release
     }
+    state.streamActive = false;
 }
 
 async function toggleCamera() {
@@ -664,6 +672,9 @@ function processFrame() {
         lastRenderWidth = renderW;
         lastRenderHeight = renderH;
         updateViewfinderAspect(s.aspectRatio, s.orientation);
+        
+        // Regenerate damage map if resolution changed
+        state.damageCanvas = generateDamageMap(renderW, renderH);
     }
 
     const vw = video.videoWidth;
@@ -819,14 +830,34 @@ function processFrame() {
         const idx = (y * renderW + x) * 4;
         return { r: arr[idx], g: arr[idx+1], b: arr[idx+2] };
     };
+    
+// Update Vertical Roll State
+    if (s.vertRoll > 0) {
+        state.rollOffset = (state.rollOffset || 0) + (renderH * s.vertRoll * 0.1); 
+        if (state.rollOffset > renderH) state.rollOffset -= renderH;
+    } else {
+        state.rollOffset = 0;
+    }
+    const rollY = Math.floor(state.rollOffset);
 
     // Pixel Loop
     for (let y = 0; y < renderH; y++) {
-        const isTrackingRow = hasTrackingArtifact && y >= trackingY && y < trackingY + 2;
-        const ny = doCurvature ? (y / renderH) * 2 - 1 : 0;
+        // 1. V-Hold Roll: Wrap the Y coordinate
+        let vRollSy = y - rollY;
+        if (vRollSy < 0) vRollSy += renderH;
+
+        // 2. Sync Bar: Create a dark band at the rolling seam
+        const isSyncBar = s.vertRoll > 0 && vRollSy > renderH - (renderH * 0.05);
+
+        // 3. Tracking Artifacts (Calculated on the rolled Y)
+        const isTrackingRow = hasTrackingArtifact && vRollSy >= trackingY && vRollSy < trackingY + 2;
+        
+        // 4. Curvature (Calculated on the rolled Y)
+        const ny = doCurvature ? (vRollSy / renderH) * 2 - 1 : 0;
 
         for (let x = 0; x < renderW; x++) {
-            let sx = x, sy = y;
+            let sx = x, sy = vRollSy;
+            
             if (doCurvature) {
                 const nx = (x / renderW) * 2 - 1;
                 const r2 = nx*nx + ny*ny;
@@ -837,7 +868,7 @@ function processFrame() {
             sx += jitterX;
             sy += jitterY;
 
-            // Center coordinates (Green Channel / Detail)
+            // Coordinates
             const srcX = Math.floor(sx);
             const srcY = Math.floor(sy);
             
@@ -851,59 +882,53 @@ function processFrame() {
                 return 0;
             };
 
-            // 1. PRIMARY READ (Sharpen or Standard)
-            // This establishes the base image (usually the Green channel's perspective)
-            if (doSharpen) {
-                if (srcX >= 1 && srcX < renderW - 1 && srcY >= 1 && srcY < renderH - 1) {
-                    const cIdx = (srcY * renderW + srcX) * 4;
-                    const tIdx = ((srcY-1) * renderW + srcX) * 4;
-                    const bIdx = ((srcY+1) * renderW + srcX) * 4;
-                    const lIdx = (srcY * renderW + srcX-1) * 4;
-                    const rIdx = (srcY * renderW + srcX+1) * 4;
-
-                    const cr = sourcePixels[cIdx], cg = sourcePixels[cIdx+1], cb = sourcePixels[cIdx+2];
-                    const tr = sourcePixels[tIdx], tg = sourcePixels[tIdx+1], tb = sourcePixels[tIdx+2];
-                    const br = sourcePixels[bIdx], bg = sourcePixels[bIdx+1], bb = sourcePixels[bIdx+2];
-                    const lr = sourcePixels[lIdx], lg = sourcePixels[lIdx+1], lb = sourcePixels[lIdx+2];
-                    const rr = sourcePixels[rIdx], rg = sourcePixels[rIdx+1], rb = sourcePixels[rIdx+2];
-
-                    r = cr*(1+4*sharpAmt) - sharpAmt*(tr+br+lr+rr);
-                    g = cg*(1+4*sharpAmt) - sharpAmt*(tg+bg+lg+rg);
-                    b = cb*(1+4*sharpAmt) - sharpAmt*(tb+bb+lb+rb);
-                } else {
-                    const c = getSafe(sourcePixels, srcX, srcY);
-                    const t = getSafe(sourcePixels, srcX, srcY-1);
-                    const bt = getSafe(sourcePixels, srcX, srcY+1);
-                    const l = getSafe(sourcePixels, srcX-1, srcY);
-                    const rt = getSafe(sourcePixels, srcX+1, srcY);
-                    r = c.r*(1+4*sharpAmt) - sharpAmt*(t.r+bt.r+l.r+rt.r);
-                    g = c.g*(1+4*sharpAmt) - sharpAmt*(t.g+bt.g+l.g+rt.g);
-                    b = c.b*(1+4*sharpAmt) - sharpAmt*(t.b+bt.b+l.b+rt.b);
-                }
-            } else {
-                // Standard Read
-                if (srcX >= 0 && srcX < renderW && srcY >= 0 && srcY < renderH) {
-                    const idx = (srcY * renderW + srcX) * 4;
-                    r = sourcePixels[idx]; g = sourcePixels[idx+1]; b = sourcePixels[idx+2];
-                }
+            // 5. VHS Color Bleed Calculation
+            // Smear Red and Blue to the left/right relative to Green
+            let bleedR_X = sx;
+            let bleedB_X = sx;
+            
+            if (s.colorBleed > 0 && !isSyncBar) {
+                bleedR_X = sx - s.colorBleed;       // Red lags behind
+                bleedB_X = sx - (s.colorBleed * 0.5); // Blue lags slightly
             }
 
-            // 2. LENS FRINGE OVERRIDE
-            // Now that we have the base pixel, we overwrite R and B if fringe is active.
-            // This applies the offset AFTER sharpening/sampling, ensuring it is visible.
-            if (s.lensFringe > 0) {
+            // --- PIXEL READ ---
+            if (isSyncBar) {
+                // Draw the rolling black bar
+                r = g = b = 15; 
+            } else if (doSharpen && !isSyncBar) {
+                // Sharpen Logic (Applied primarily to Green/Luma)
+                // We read Neighbors relative to the rolled Y (srcY)
+                
+                // Read Green (Detail channel) with sharpening
+                // Note: Simplified sharpen for brevity in this complex loop
+                const c = getPx(srcX, srcY, 1);
+                const n = getPx(srcX, srcY-1, 1) + getPx(srcX, srcY+1, 1) + getPx(srcX-1, srcY, 1) + getPx(srcX+1, srcY, 1);
+                g = c*(1+4*sharpAmt) - sharpAmt*n;
+
+                // Read Red/Blue from Bleed coordinates (Unsharpened to enhance smear)
+                r = getPx(Math.floor(bleedR_X), srcY, 0);
+                b = getPx(Math.floor(bleedB_X), srcY, 2);
+            } else {
+                // Standard Read
+                g = getPx(srcX, srcY, 1);
+                r = getPx(Math.floor(bleedR_X), srcY, 0);
+                b = getPx(Math.floor(bleedB_X), srcY, 2);
+            }
+
+            // 6. LENS FRINGE OVERRIDE
+            // Applies chromatic aberration on top of the VHS bleed
+            if (s.lensFringe > 0 && !isSyncBar) {
                 const fringe = s.lensFringe;
                 
-                // Calculate separate coordinates
-                const rX = Math.floor(sx - fringe); // Red shifts left
-                const bX = Math.floor(sx + fringe); // Blue shifts right
+                const rX = Math.floor(sx - fringe);
+                const bX = Math.floor(sx + fringe);
 
-                // Get offset colors
                 const rOff = getPx(rX, srcY, 0);
                 const bOff = getPx(bX, srcY, 2);
 
-                // This creates a semi-transparent ghosting effect typical of cheap lenses
-                const fOp = 0.4; 
+                // Opacity: 0.6 (60% Fringe, 40% Original)
+                const fOp = 0.6; 
                 
                 r = r * (1 - fOp) + rOff * fOp;
                 b = b * (1 - fOp) + bOff * fOp;
@@ -1010,54 +1035,51 @@ function processFrame() {
     ctx.putImageData(renderImageData, 0, 0);
     previousRawFrameData = currentRawFrameSnapshot;
 
-    // --- Bloom Pass (FIXED) ---
-    // Instead of drawing raw video (which creates ghosting due to curvature mismatch),
-    // we draw the *already processed* canvas content back onto itself with a blur.
-    // This ensures the bloom aligns perfectly with the distorted, pixelated image.
+    // --- Bloom Pass ---
     if (s.bloom > 0) {
         ctx.save();
         ctx.globalCompositeOperation = 'screen';
-        // Blur relative to resolution to keep look consistent
         const blurAmt = Math.max(2, renderW * 0.05); 
         ctx.filter = `blur(${blurAmt}px) brightness(1.5) contrast(1.2)`;
         ctx.globalAlpha = s.bloom * 0.6; 
-        
-        // Draw the canvas onto itself
         ctx.drawImage(els.canvas, 0, 0, renderW, renderH);
-        
         ctx.restore();
     }
 
+    // --- Unique Lens Damage (Dust/Scratches) ---
+    // Requires state.damageCanvas to be populated by generateDamageMap()
+    if (state.damageCanvas && s.lensDamage > 0) {
+        ctx.save();
+        ctx.globalCompositeOperation = 'multiply'; // Burn into image
+        ctx.globalAlpha = s.lensDamage;
+        
+        // Jitter the damage map slightly (Film Gate Shake)
+        const dmgJitterX = (Math.random() - 0.5) * 2;
+        const dmgJitterY = (Math.random() - 0.5) * 2;
+        
+        ctx.drawImage(state.damageCanvas, dmgJitterX, dmgJitterY);
+        ctx.restore();
+    }
+
+    // --- Date Stamp ---
     if (s.dateStamp === 'on') {
         const d = new Date();
-        // Format: '98 1 24 (Year Month Day - Camcorder style)
         const year = d.getFullYear().toString().slice(-2);
         const month = d.getMonth() + 1;
         const day = d.getDate();
         const dateStr = `'${year} ${month} ${day}`;
 
         ctx.save();
-        
-        // Font settings scaled to resolution
         const fontSize = Math.max(12, Math.floor(renderH * 0.05));
-        ctx.font = `${fontSize}px "VCR OSD Mono", monospace`; 
+        ctx.font = `${fontSize}px "VCR", monospace`; 
         ctx.textBaseline = 'bottom';
         ctx.textAlign = 'right';
-        
-        // Position: Bottom Right with padding
         const padX = renderW * 0.05;
         const padY = renderH * 0.05;
-
-        // Camcorder Orange Color
         ctx.fillStyle = '#ffaa33'; 
-        
-        // Slight Glow for authenticity
         ctx.shadowColor = '#ff5500';
         ctx.shadowBlur = 4;
-        
-        // Draw
         ctx.fillText(dateStr, renderW - padX, renderH - padY);
-        
         ctx.restore();
     }
 }
@@ -1186,7 +1208,7 @@ async function capturePhoto() {
     }
 }
 
-async function processCapture(dataUrl) {
+async function processCapture(dataUrl) {    
     // Save backup to IDB
     try {
         const res = await fetch(dataUrl);
@@ -1203,6 +1225,7 @@ async function processCapture(dataUrl) {
             }, 1000);
         });
     } else {
+        stopCamera(); 
         state.capturedImage = dataUrl;
         state.capturedVideo = null;
         updateUI();
@@ -1273,6 +1296,7 @@ function startRecording() {
                  updateUI();
             });
         } else {
+            stopCamera(); // Stop HW resources
             state.capturedVideo = url;
             state.capturedImage = null;
             state.isRecording = false;
@@ -1292,8 +1316,17 @@ function stopRecording() {
 
 function retake() {
     if (state.capturedVideo) URL.revokeObjectURL(state.capturedVideo);
+    
+    // Clean up DOM elements if necessary (Video/Img src)
+    els.resultImg.removeAttribute('src');
+    els.resultVid.removeAttribute('src');
+    
     state.capturedVideo = null;
     state.capturedImage = null;
+    
+    // Restart Hardware
+    startCamera();
+    
     updateUI();
 }
 
@@ -1479,16 +1512,89 @@ const SETTING_DEFS = [
     { key: 'motionThreshold', label: 'MOTION SENSITIVITY', type: 'range', min: 0.01, max: 0.5, step: 0.01, unit: '' },
     { key: 'trackingNoise', label: 'TRACKING ARTIFACTS', type: 'range', min: 0, max: 1, step: 0.1, unit: '' },
     { key: 'scanlineIntensity', label: 'SCANLINES', type: 'range', min: 0, max: 1, step: 0.1, unit: '' },
+    { key: 'vertRoll', label: 'V-HOLD ROLL', type: 'range', min: 0, max: 0.5, step: 0.01, unit: '' },
     { key: 'hueShift', label: 'COLOR TEMP SHIFT', type: 'range', min: 0, max: 2, step: 0.1, unit: 'x' },
     { key: 'colorDepth', label: 'BIT CRUSH', type: 'range', min: 0, max: 100, step: 2, unit: '%' },
+    { key: 'colorBleed', label: 'VHS COLOR BLEED', type: 'range', min: 0, max: 50, step: 1, unit: 'px' },
     { key: 'lensFringe', label: 'LENS FRINGE', type: 'range', min: 0, max: 10, step: 0.5, unit: 'px' },
     { key: 'vignette', label: 'VIGNETTE', type: 'range', min: 0, max: 1.5, step: 0.1, unit: '' },
+    { key: 'lensDamage', label: 'LENS DAMAGE', type: 'range', min: 0, max: 1.0, step: 0.1, unit: '' },
     { key: 'curvature', label: 'LENS CURVATURE', type: 'range', min: -0.5, max: 0.5, step: 0.05, unit: '' },
     { key: 'audioHiss', label: 'TAPE HISS', type: 'range', min: 0, max: 1, step: 0.1, unit: '' },
     { key: 'audioDistortion', label: 'AUDIO CRUNCH', type: 'range', min: 0, max: 1, step: 0.1, unit: '' },
     { key: 'autoSave', label: 'AUTO SAVE TO DEVICE', type: 'select', options: ['off', 'on'] },
     { key: 'saveMode', label: 'SAVE ACTION', type: 'select', options: ['auto', 'share', 'download'] },
 ];
+
+function getUniqueSeed() {
+    let name = localStorage.getItem('twosies_user_id');
+    if (!name) {
+        // Native JS Input
+        name = prompt("INITIALIZING...\nENTER ANY WORD:") || "UNKNOWN";
+        name = name.toUpperCase().replace(/[^A-Z0-9]/g, '');
+        localStorage.setItem('twosies_user_id', name);
+    }
+    
+    // Generate Hash from Name + Screen + UserAgent
+    const str = name + window.screen.width + window.screen.height + navigator.userAgent;
+    let hash = 0;
+    for (let i = 0; i < str.length; i++) {
+        hash = ((hash << 5) - hash) + str.charCodeAt(i);
+        hash |= 0; // Convert to 32bit integer
+    }
+    return Math.abs(hash);
+}
+
+// Seeded Random Number Generator
+function seededRandom(seed) {
+    var x = Math.sin(seed++) * 10000;
+    return x - Math.floor(x);
+}
+
+function generateDamageMap(w, h) {
+    if (!state.uniqueSeed) state.uniqueSeed = getUniqueSeed();
+    
+    const cvs = document.createElement('canvas');
+    cvs.width = w;
+    cvs.height = h;
+    const ctx = cvs.getContext('2d');
+    
+    let seed = state.uniqueSeed;
+    
+    ctx.strokeStyle = '#222';
+    ctx.fillStyle = '#111';
+    ctx.lineWidth = 1;
+    ctx.globalAlpha = 0.8;
+
+    // Generate Scratches (Vertical lines)
+    const scratches = 5 + Math.floor(seededRandom(seed++) * 10);
+    for(let i=0; i<scratches; i++) {
+        const x = seededRandom(seed++) * w;
+        ctx.beginPath();
+        ctx.moveTo(x, 0);
+        // Scratches are rarely perfectly straight
+        ctx.bezierCurveTo(
+            x + (seededRandom(seed++)-0.5)*10, h*0.3, 
+            x + (seededRandom(seed++)-0.5)*10, h*0.6, 
+            x + (seededRandom(seed++)-0.5)*20, h
+        );
+        ctx.stroke();
+    }
+
+    // Generate Dust (Blobs)
+    const dust = 20 + Math.floor(seededRandom(seed++) * 30);
+    for(let i=0; i<dust; i++) {
+        const x = seededRandom(seed++) * w;
+        const y = seededRandom(seed++) * h;
+        const size = 1 + seededRandom(seed++) * 3;
+        
+        ctx.beginPath();
+        ctx.arc(x, y, size, 0, Math.PI*2);
+        ctx.fill();
+    }
+    
+    return cvs;
+}
 
 function renderSettingsUI() {
     const container = els.settingsContainer;
