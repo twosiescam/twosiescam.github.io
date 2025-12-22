@@ -30,7 +30,7 @@ const DEFAULT_SETTINGS = {
     colorBleed: 1,
     vertRoll: 0.0,
     lensDamage: 0.1,
-    hWave: 0.1,
+    hWave: 1,
     dateStamp: 'off'
 };
 
