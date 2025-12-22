@@ -294,6 +294,7 @@ body {
     padding: 0 2rem;
     display: flex; justify-content: space-between; align-items: center;
     z-index: 50;
+    position: fixed;
     bottom: calc(env(safe-area-inset-bottom) + 10px);
 }
 
