@@ -857,8 +857,6 @@ function processFrame() {
             const gX = Math.floor(srcX_G);
             const bX = Math.floor(srcX_B);
             
-            let r=0, g=0, b=0;
-
             // Helper to safe-read pixels
             const getPx = (tx, ty, offset) => {
                 if (tx >= 0 && tx < renderW && ty >= 0 && ty < renderH) {
