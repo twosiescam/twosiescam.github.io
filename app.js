@@ -856,7 +856,6 @@ function processFrame() {
             const rX = Math.floor(srcX_R);
             const gX = Math.floor(srcX_G);
             const bX = Math.floor(srcX_B);
-            const srcY = Math.floor(sy);
             
             let r=0, g=0, b=0;
 
