@@ -15,7 +15,7 @@ const DEFAULT_SETTINGS = {
     sharpen: 1.0,
     bloom: 1.0,
     interlace: 0.2,
-    quality: 240,
+    quality: 360,
     zoom: 1.0,
     aspectRatio: '4:3',
     orientation: 'auto',
@@ -24,7 +24,7 @@ const DEFAULT_SETTINGS = {
     saveMode: 'auto',
     audioHiss: 0.2,
     audioDistortion: 0.3,
-    colorDepth: 25
+    colorDepth: 50
 };
 
 // Application State
