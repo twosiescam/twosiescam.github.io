@@ -300,6 +300,7 @@ body {
 .counter-display {
     display: flex; flex-direction: column; align-items: center; justify-content: center;
     opacity: 0.3; width: 4rem;
+    font-family: 'Barlow Condensed', monospace;
 }
 .counter-text {
     font-size: 1.25rem; font-weight: bold; letter-spacing: 0.1em;
