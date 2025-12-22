@@ -1047,7 +1047,7 @@ function processFrame() {
         
         // Font settings scaled to resolution
         const fontSize = Math.max(12, Math.floor(renderH * 0.05));
-        ctx.font = `${fontSize}px "VCR", monospace`; 
+        ctx.font = `${fontSize}px "VCR OSD Mono", monospace`; 
         ctx.textBaseline = 'bottom';
         ctx.textAlign = 'right';
         
