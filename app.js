@@ -1399,7 +1399,7 @@ function updateUI() {
     els.canvasContainer.classList.toggle('hidden', !!(state.capturedImage || state.capturedVideo));
 
     els.recIndicator.classList.toggle('hidden', !state.isRecording);
-    els.recStateText.textContent = state.isLocked ? 'LOCKED' : 'REC';
+    els.recStateText.textContent = state.isLocked ? 'LOCKED' : 'RECORD';
 
     // Show zoom indicator if zoomed or setting active
     const isZoomed = state.settings.zoom > 1.0;
@@ -1411,13 +1411,13 @@ function updateUI() {
         els.controlsCapture.classList.add('hidden');
         els.controlsReview.classList.remove('hidden');
         els.btnFlip.parentElement.classList.add('hidden');
-        els.counterText.textContent = 'MEM';
+        els.counterText.textContent = 'MEMORY';
     } else {
         els.controlsCapture.classList.remove('hidden');
         els.controlsReview.classList.add('hidden');
         els.btnFlip.parentElement.classList.remove('hidden');
         if (state.isRecording) {
-            els.counterText.textContent = state.isLocked ? 'LCK' : 'REC';
+            els.counterText.textContent = state.isLocked ? 'LOCKED' : 'RECORD';
         } else if (els.counterText.textContent !== 'SAVED') {
             els.counterText.textContent = '';
         }
