@@ -8,7 +8,7 @@ const DEFAULT_SETTINGS = {
     brightness: 0.9,
     contrast: 2.4,
     noise: 35,
-    scanlineIntensity: 0.8,
+    scanlineIntensity: 0.2,
     trackingNoise: 0.3,
     curvature: -0.05,
     blur: 0.5,
