@@ -470,7 +470,6 @@ input[type=range]::-webkit-slider-runnable-track {
         top: 50%;
         left: -4rem;
         transform: translateY(-50%) rotate(-90deg);
-        animation: bounceHorizontal 1s infinite;
     }
     
     @keyframes bounceHorizontal {
