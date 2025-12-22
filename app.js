@@ -27,10 +27,10 @@ const DEFAULT_SETTINGS = {
     colorDepth: 50,
     lensFringe: 0.0,
     vignette: 0.2,
-    colorBleed: 2,
+    colorBleed: 1,
     vertRoll: 0.0,
     lensDamage: 0.1,
-    hWave: 0,
+    hWave: 0.1,
     dateStamp: 'off'
 };
 
@@ -814,22 +814,22 @@ function processFrame() {
 
     const hWaveScanlineOffsets = new Float32Array(renderH);
     if (s.hWave > 0) {
-        state.waveTimer += 0.2; // Animation speed
+        state.waveTimer += 0.5; // Faster jitter speed
         
         for (let i = 0; i < renderH; i++) {
-            // Generator 1: High frequency sine (Tearing)
-            const w1 = Math.sin(i * 0.5 + state.waveTimer);
+            // 1. High Frequency Sine (Controls Vertical Height of bands)
+            // Multiplying 'i' by 4.0 makes the bands very thin (2-3 pixels tall)
+            const w1 = Math.sin(i * 4.0 + state.waveTimer);
             
-            // Generator 2: Lower frequency (Wobble)
-            const w2 = Math.sin(i * 0.05 - state.waveTimer * 0.5);
+            // 2. Random Noise
+            // Breaks the perfect sine wave into jagged "tracking" noise
+            const noise = (Math.random() - 0.5) * 1.5;
             
-            // "Square" shaping (Hard edges like the screenshot)
-            const shape = (w1 + w2) > 0 ? 1 : -1;
+            // 3. Square Shaping
+            // Hard threshold creates the digital tearing look
+            const shape = (w1 + noise) > 0 ? 1 : -1;
             
-            // Jitter: Add random noise to the amplitude
-            const jitter = (Math.random() - 0.5) * 0.5;
-            
-            hWaveScanlineOffsets[i] = (shape + jitter) * s.hWave;
+            hWaveScanlineOffsets[i] = shape * s.hWave;
         }
     }
 
