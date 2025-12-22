@@ -1,3 +1,9 @@
+@font-face {
+    font-family: 'VCR OSD Mono';
+    src: url('font/vcr.ttf') format('truetype');
+    font-weight: normal;
+    font-style: normal;
+}
 
 :root {
     /* Color Palette */
