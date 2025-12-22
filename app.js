@@ -24,7 +24,7 @@ const DEFAULT_SETTINGS = {
     saveMode: 'auto',
     audioHiss: 0.2,
     audioDistortion: 0.3,
-    colorDepth: 6
+    colorDepth: 8
 };
 
 // Application State
@@ -749,15 +749,20 @@ function processFrame() {
     const renderData = renderImageData.data;
     const currentRawFrameSnapshot = new Uint8ClampedArray(rawData);
 
-    const bits = Math.floor(s.colorDepth);
-    const useBanding = bits < 8; // Skip if 8-bit (standard) or higher
+    const levels = Math.floor(s.colorDepth);
+    const useBanding = levels < 12; 
     const colorLUT = new Uint8Array(256);
     
     if (useBanding) {
-        const levels = Math.pow(2, bits);
+        // Calculate the step size for the quantization
+        // e.g., 2 levels = step 255 (0 or 255)
+        // e.g., 4 levels = step 85 (0, 85, 170, 255)
         const valStep = 255 / (levels - 1);
+        
         for(let i=0; i<256; i++) {
-            colorLUT[i] = Math.round(Math.round(i / valStep) * valStep);
+            // Quantize
+            let val = Math.round(i / valStep) * valStep;
+            colorLUT[i] = Math.max(0, Math.min(255, Math.round(val)));
         }
     }
 
@@ -1384,7 +1389,7 @@ const SETTING_DEFS = [
     { key: 'scanlineIntensity', label: 'SCANLINES', type: 'range', min: 0, max: 1, step: 0.1, unit: '' },
     { key: 'motionThreshold', label: 'MOTION SENSITIVITY', type: 'range', min: 0.01, max: 0.5, step: 0.01, unit: '' },
     { key: 'hueShift', label: 'COLOR TEMP SHIFT', type: 'range', min: 0, max: 2, step: 0.1, unit: 'x' },
-    { key: 'colorDepth', label: 'COLOR BIT DEPTH', type: 'range', min: 1, max: 8, step: 1, unit: ' bit' },
+    { key: 'colorDepth', label: 'COLOR CRUNCH', type: 'range', min: 2, max: 12, step: 1, unit: ' Lvl' },
     { key: 'saturation', label: 'SATURATION', type: 'range', min: 0, max: 4, step: 0.1, unit: 'x' },
     { key: 'brightness', label: 'BRIGHTNESS', type: 'range', min: 0, max: 2, step: 0.1, unit: 'x' },
     { key: 'contrast', label: 'CONTRAST', type: 'range', min: 0, max: 5, step: 0.1, unit: 'x' },
