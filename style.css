@@ -443,8 +443,7 @@ input[type=range]::-webkit-slider-runnable-track {
         flex: 1;
         height: 100vh;
         margin: 0;
-        border-radius: 0.25rem;
-        max-width: fit-content;
+        max-width: calc(100vw - 130px);
         position: fixed;
         top: 0;
         right: 130px;
