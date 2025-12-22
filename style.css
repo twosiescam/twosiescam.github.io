@@ -107,6 +107,7 @@ body {
     padding: 0.5rem;
     cursor: pointer;
     transition: color 0.2s;
+    height: 50px;
 }
 .btn-icon:active { color: var(--c-white); }
 .btn-icon svg { display: block; }
