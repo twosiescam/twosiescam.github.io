@@ -903,7 +903,7 @@ function processFrame() {
                 const bOff = getPx(bX, srcY, 2);
 
                 // This creates a semi-transparent ghosting effect typical of cheap lenses
-                const fOp = 0.2; 
+                const fOp = 0.4; 
                 
                 r = r * (1 - fOp) + rOff * fOp;
                 b = b * (1 - fOp) + bOff * fOp;
