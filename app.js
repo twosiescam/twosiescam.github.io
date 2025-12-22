@@ -24,7 +24,7 @@ const DEFAULT_SETTINGS = {
     saveMode: 'auto',
     audioHiss: 0.2,
     audioDistortion: 0.3,
-    colorDepth: 8
+    colorDepth: 25
 };
 
 // Application State
@@ -749,20 +749,23 @@ function processFrame() {
     const renderData = renderImageData.data;
     const currentRawFrameSnapshot = new Uint8ClampedArray(rawData);
 
-    const levels = Math.floor(s.colorDepth);
-    const useBanding = levels < 12; 
+    // 0 = Off. 100 = Step 128 (Extreme, 2 colors). 20 = Step 25 (Visible banding).
+    const crush = s.colorDepth;
+    const useBanding = crush > 0;
     const colorLUT = new Uint8Array(256);
     
     if (useBanding) {
-        // Calculate the step size for the quantization
-        // e.g., 2 levels = step 255 (0 or 255)
-        // e.g., 4 levels = step 85 (0, 85, 170, 255)
-        const valStep = 255 / (levels - 1);
+        // Map 0-100 slider to 0-128 step size
+        const step = (crush / 100) * 128; 
         
         for(let i=0; i<256; i++) {
-            // Quantize
-            let val = Math.round(i / valStep) * valStep;
-            colorLUT[i] = Math.max(0, Math.min(255, Math.round(val)));
+            if (step < 1) {
+                colorLUT[i] = i;
+            } else {
+                // Quantize to nearest step
+                let val = Math.round(i / step) * step;
+                colorLUT[i] = Math.max(0, Math.min(255, Math.round(val)));
+            }
         }
     }
 
@@ -918,6 +921,17 @@ function processFrame() {
                 b = b * 3 + 100;
             }
 
+            if (useBanding) {
+                // Clamp floats to 0-255 integer range for LUT lookup
+                let ri = r < 0 ? 0 : (r > 255 ? 255 : r);
+                let gi = g < 0 ? 0 : (g > 255 ? 255 : g);
+                let bi = b < 0 ? 0 : (b > 255 ? 255 : b);
+                
+                r = colorLUT[Math.round(ri)];
+                g = colorLUT[Math.round(gi)];
+                b = colorLUT[Math.round(bi)];
+            }
+
             const noise = (Math.random()-0.5)*s.noise;
             r+=noise; g+=noise; b+=noise;
 
@@ -931,17 +945,6 @@ function processFrame() {
                 b = Math.min(255, b+40);
                 const trk = (Math.random()-0.5)*(50+(s.trackingNoise*50));
                 r+=trk; g+=trk; b+=trk;
-            }
-
-            if (useBanding) {
-                // Clamp floats to 0-255 integer range for LUT lookup
-                let ri = r < 0 ? 0 : (r > 255 ? 255 : r);
-                let gi = g < 0 ? 0 : (g > 255 ? 255 : g);
-                let bi = b < 0 ? 0 : (b > 255 ? 255 : b);
-                
-                r = colorLUT[Math.round(ri)];
-                g = colorLUT[Math.round(gi)];
-                b = colorLUT[Math.round(bi)];
             }
 
             const dIdx = (y*renderW + x)*4;
@@ -1389,7 +1392,7 @@ const SETTING_DEFS = [
     { key: 'scanlineIntensity', label: 'SCANLINES', type: 'range', min: 0, max: 1, step: 0.1, unit: '' },
     { key: 'motionThreshold', label: 'MOTION SENSITIVITY', type: 'range', min: 0.01, max: 0.5, step: 0.01, unit: '' },
     { key: 'hueShift', label: 'COLOR TEMP SHIFT', type: 'range', min: 0, max: 2, step: 0.1, unit: 'x' },
-    { key: 'colorDepth', label: 'COLOR CRUNCH', type: 'range', min: 2, max: 12, step: 1, unit: ' Lvl' },
+    { key: 'colorDepth', label: 'BIT CRUSH', type: 'range', min: 0, max: 100, step: 2, unit: '%' },
     { key: 'saturation', label: 'SATURATION', type: 'range', min: 0, max: 4, step: 0.1, unit: 'x' },
     { key: 'brightness', label: 'BRIGHTNESS', type: 'range', min: 0, max: 2, step: 0.1, unit: 'x' },
     { key: 'contrast', label: 'CONTRAST', type: 'range', min: 0, max: 5, step: 0.1, unit: 'x' },
