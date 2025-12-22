@@ -814,22 +814,22 @@ function processFrame() {
 
     const hWaveScanlineOffsets = new Float32Array(renderH);
     if (s.hWave > 0) {
-        state.waveTimer += 0.5; // Faster jitter speed
+        state.waveTimer += 0.5; 
         
         for (let i = 0; i < renderH; i++) {
-            // 1. High Frequency Sine (Controls Vertical Height of bands)
-            // Multiplying 'i' by 4.0 makes the bands very thin (2-3 pixels tall)
+            // High frequency sine (Very thin bands)
             const w1 = Math.sin(i * 4.0 + state.waveTimer);
             
-            // 2. Random Noise
-            // Breaks the perfect sine wave into jagged "tracking" noise
-            const noise = (Math.random() - 0.5) * 1.5;
+            // Reduced noise range for a cleaner "zipper" look
+            const noise = (Math.random() - 0.5) * 0.5; 
             
-            // 3. Square Shaping
-            // Hard threshold creates the digital tearing look
+            // Hard threshold for digital tracking tear
             const shape = (w1 + noise) > 0 ? 1 : -1;
             
-            hWaveScanlineOffsets[i] = shape * s.hWave;
+            // CHANGED: Multiplied by 0.15. 
+            // Previous version used raw 1.0, which shifted pixels way too far.
+            // This ensures the distortion remains tight to the edge.
+            hWaveScanlineOffsets[i] = shape * (s.hWave * 0.15);
         }
     }
 
