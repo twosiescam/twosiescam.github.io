@@ -1050,10 +1050,14 @@ function processFrame() {
     // Requires state.damageCanvas to be populated by generateDamageMap()
     if (state.damageCanvas && s.lensDamage > 0) {
         ctx.save();
-        ctx.globalCompositeOperation = 'multiply'; // Burn into image
+        
+        // CHANGED: 'source-over' allows both Dark Dust and White Static to show.
+        // Previous 'multiply' would hide the white static lines.
+        ctx.globalCompositeOperation = 'source-over'; 
+        
         ctx.globalAlpha = s.lensDamage;
         
-        // Jitter the damage map slightly (Film Gate Shake)
+        // Jitter the damage map slightly (Film Gate/Tape Shake)
         const dmgJitterX = (Math.random() - 0.5) * 2;
         const dmgJitterY = (Math.random() - 0.5) * 2;
         
@@ -1561,36 +1565,43 @@ function generateDamageMap(w, h) {
     
     let seed = state.uniqueSeed;
     
-    ctx.strokeStyle = '#222';
-    ctx.fillStyle = '#111';
-    ctx.lineWidth = 1;
-    ctx.globalAlpha = 0.8;
-
-    // Generate Scratches (Vertical lines)
-    const scratches = 5 + Math.floor(seededRandom(seed++) * 10);
-    for(let i=0; i<scratches; i++) {
-        const x = seededRandom(seed++) * w;
-        ctx.beginPath();
-        ctx.moveTo(x, 0);
-        // Scratches are rarely perfectly straight
-        ctx.bezierCurveTo(
-            x + (seededRandom(seed++)-0.5)*10, h*0.3, 
-            x + (seededRandom(seed++)-0.5)*10, h*0.6, 
-            x + (seededRandom(seed++)-0.5)*20, h
-        );
-        ctx.stroke();
-    }
-
-    // Generate Dust (Blobs)
-    const dust = 20 + Math.floor(seededRandom(seed++) * 30);
-    for(let i=0; i<dust; i++) {
+    // 1. Sensor/Lens Dust (Dark, Fuzzy, Irregular)
+    // Simulates dirt on the CCD sensor or lens, common in old camcorders
+    const dustCount = 3 + Math.floor(seededRandom(seed++) * 5);
+    
+    for(let i=0; i<dustCount; i++) {
         const x = seededRandom(seed++) * w;
         const y = seededRandom(seed++) * h;
-        const size = 1 + seededRandom(seed++) * 3;
+        const size = 20 + seededRandom(seed++) * 60; // Larger, softer blobs
+        const opacity = 0.2 + seededRandom(seed++) * 0.3;
         
+        // Create soft, organic smudge
+        const grad = ctx.createRadialGradient(x, y, 0, x, y, size);
+        grad.addColorStop(0, `rgba(20, 20, 20, ${opacity})`);
+        grad.addColorStop(0.5, `rgba(40, 40, 40, ${opacity * 0.5})`);
+        grad.addColorStop(1, 'rgba(0,0,0,0)');
+        
+        ctx.fillStyle = grad;
         ctx.beginPath();
-        ctx.arc(x, y, size, 0, Math.PI*2);
+        // Deform the circle slightly so it's not perfect
+        ctx.ellipse(x, y, size, size * (0.8 + seededRandom(seed++)*0.4), seededRandom(seed++)*Math.PI, 0, Math.PI*2);
         ctx.fill();
+    }
+
+    // 2. Tape Dropouts (White, Horizontal Static)
+    // Simulates magnetic tape signal loss
+    const dropoutCount = 15 + Math.floor(seededRandom(seed++) * 20);
+    
+    for(let i=0; i<dropoutCount; i++) {
+        const x = seededRandom(seed++) * w;
+        const y = seededRandom(seed++) * h;
+        const width = 10 + seededRandom(seed++) * 150;
+        // VHS dropouts are thin horizontal lines
+        const height = 1 + seededRandom(seed++) * 2; 
+        const opacity = 0.1 + seededRandom(seed++) * 0.2;
+        
+        ctx.fillStyle = `rgba(220, 230, 255, ${opacity})`;
+        ctx.fillRect(x, y, width, height);
     }
     
     return cvs;
