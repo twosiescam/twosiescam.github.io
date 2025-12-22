@@ -24,7 +24,10 @@ const DEFAULT_SETTINGS = {
     saveMode: 'auto',
     audioHiss: 0.2,
     audioDistortion: 0.3,
-    colorDepth: 50
+    colorDepth: 50,
+    lensFringe: 2.0,
+    vignette: 0.4,
+    dateStamp: 'off'
 };
 
 // Application State
@@ -839,6 +842,45 @@ function processFrame() {
             
             let r=0, g=0, b=0;
 
+            // Instead of reading RGB from the same coordinate, we offset them.
+            const fringe = s.lensFringe;
+            let srcX_R = sx, srcX_G = sx, srcX_B = sx;
+
+            if (fringe > 0) {
+                // Distort based on distance from center for realism, or just fixed offset
+                srcX_R = sx - fringe; // Red shifts left
+                srcX_B = sx + fringe; // Blue shifts right
+            }
+
+            // Round coordinates
+            const rX = Math.floor(srcX_R);
+            const gX = Math.floor(srcX_G);
+            const bX = Math.floor(srcX_B);
+            const srcY = Math.floor(sy);
+            
+            let r=0, g=0, b=0;
+
+            // Helper to safe-read pixels
+            const getPx = (tx, ty, offset) => {
+                if (tx >= 0 && tx < renderW && ty >= 0 && ty < renderH) {
+                    return sourcePixels[(ty * renderW + tx) * 4 + offset];
+                }
+                return 0;
+            };
+
+            // Read Channels separately
+            if (fringe > 0) {
+                r = getPx(rX, srcY, 0); // Read Red from offset
+                g = getPx(gX, srcY, 1); // Read Green from center
+                b = getPx(bX, srcY, 2); // Read Blue from offset
+            } else {
+                // Standard Read (Optimization)
+                if (gX >= 0 && gX < renderW && srcY >= 0 && srcY < renderH) {
+                    const idx = (srcY * renderW + gX) * 4;
+                    r = sourcePixels[idx]; g = sourcePixels[idx+1]; b = sourcePixels[idx+2];
+                }
+            }
+
             if (doSharpen) {
                 if (srcX >= 1 && srcX < renderW - 1 && srcY >= 1 && srcY < renderH - 1) {
                     const cIdx = (srcY * renderW + srcX) * 4;
@@ -932,6 +974,24 @@ function processFrame() {
                 b = colorLUT[Math.round(bi)];
             }
 
+            if (s.vignette > 0) {
+                // simple distance from center normalized 0-1
+                const dx = x - renderW/2;
+                const dy = y - renderH/2;
+                // Max radius is roughly corner distance
+                const maxRad = Math.sqrt((renderW/2)**2 + (renderH/2)**2); 
+                const dist = Math.sqrt(dx*dx + dy*dy);
+                
+                // Inverse Strength: 1 at center, drops off towards edge
+                let vig = 1 - (dist / maxRad) * s.vignette;
+                vig = Math.max(0, vig); // clamp
+                
+                // Apply
+                r *= vig;
+                g *= vig;
+                b *= vig;
+            }
+
             const noise = (Math.random()-0.5)*s.noise;
             r+=noise; g+=noise; b+=noise;
 
@@ -971,6 +1031,39 @@ function processFrame() {
         
         // Draw the canvas onto itself
         ctx.drawImage(els.canvas, 0, 0, renderW, renderH);
+        
+        ctx.restore();
+    }
+
+    if (s.dateStamp === 'on') {
+        const d = new Date();
+        // Format: '98 1 24 (Year Month Day - Camcorder style)
+        const year = d.getFullYear().toString().slice(-2);
+        const month = d.getMonth() + 1;
+        const day = d.getDate();
+        const dateStr = `'${year} ${month} ${day}`;
+
+        ctx.save();
+        
+        // Font settings scaled to resolution
+        const fontSize = Math.max(12, Math.floor(renderH * 0.05));
+        ctx.font = `${fontSize}px "VCR", monospace`; 
+        ctx.textBaseline = 'bottom';
+        ctx.textAlign = 'right';
+        
+        // Position: Bottom Right with padding
+        const padX = renderW * 0.05;
+        const padY = renderH * 0.05;
+
+        // Camcorder Orange Color
+        ctx.fillStyle = '#ffaa33'; 
+        
+        // Slight Glow for authenticity
+        ctx.shadowColor = '#ff5500';
+        ctx.shadowBlur = 4;
+        
+        // Draw
+        ctx.fillText(dateStr, renderW - padX, renderH - padY);
         
         ctx.restore();
     }
@@ -1374,13 +1467,12 @@ function updateViewfinderAspect(ratio, orientation) {
 // --- Settings Generation ---
 
 const SETTING_DEFS = [
-    { key: 'autoSave', label: 'AUTO SAVE TO DEVICE', type: 'select', options: ['off', 'on'] },
-    { key: 'saveMode', label: 'SAVE ACTION', type: 'select', options: ['auto', 'share', 'download'] },
     { key: 'zoom', label: 'DIGITAL ZOOM', type: 'range', min: 1, max: 4, step: 0.1, unit: 'x' },
     { key: 'aspectRatio', label: 'ASPECT RATIO', type: 'select', options: ['4:3', '16:9', '1:1', '9:16'] },
     { key: 'orientation', label: 'ORIENTATION', type: 'select', options: ['auto', 'landscape', 'portrait'] },
-    { key: 'sourceResolution', label: 'CAMERA QUALITY', type: 'select', options: ['480p', '720p', '1080p'] },
-    { key: 'quality', label: 'EFFECT RESOLUTION', type: 'range', min: 80, max: 1080, step: 20, unit: 'px' },
+    { key: 'dateStamp', label: 'DATE STAMP', type: 'select', options: ['off', 'on'] },
+    { key: 'sourceResolution', label: 'MAXIMUM RESOLUTION', type: 'select', options: ['480p', '720p', '1080p'] },
+    { key: 'quality', label: 'OUTPUT QUALITY', type: 'range', min: 80, max: 1080, step: 20, unit: 'px' },
     { key: 'fps', label: 'FRAME RATE', type: 'range', min: 1, max: 30, step: 1, unit: ' FPS' },
     { key: 'curvature', label: 'LENS CURVATURE', type: 'range', min: -0.5, max: 0.5, step: 0.05, unit: '' },
     { key: 'blur', label: 'SOFTNESS (BLUR)', type: 'range', min: 0, max: 3, step: 0.1, unit: 'px' },
@@ -1397,8 +1489,12 @@ const SETTING_DEFS = [
     { key: 'brightness', label: 'BRIGHTNESS', type: 'range', min: 0, max: 2, step: 0.1, unit: 'x' },
     { key: 'contrast', label: 'CONTRAST', type: 'range', min: 0, max: 5, step: 0.1, unit: 'x' },
     { key: 'noise', label: 'NOISE', type: 'range', min: 0, max: 100, step: 1, unit: '' },
+    { key: 'lensFringe', label: 'LENS FRINGE', type: 'range', min: 0, max: 10, step: 0.5, unit: 'px' },
+    { key: 'vignette', label: 'VIGNETTE', type: 'range', min: 0, max: 1.5, step: 0.1, unit: '' },
     { key: 'audioHiss', label: 'TAPE HISS', type: 'range', min: 0, max: 1, step: 0.1, unit: '' },
-    { key: 'audioDistortion', label: 'AUDIO CRUNCH', type: 'range', min: 0, max: 1, step: 0.1, unit: '' }
+    { key: 'audioDistortion', label: 'AUDIO CRUNCH', type: 'range', min: 0, max: 1, step: 0.1, unit: '' },
+    { key: 'autoSave', label: 'AUTO SAVE TO DEVICE', type: 'select', options: ['off', 'on'] },
+    { key: 'saveMode', label: 'SAVE ACTION', type: 'select', options: ['auto', 'share', 'download'] },
 ];
 
 function renderSettingsUI() {
