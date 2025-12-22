@@ -23,7 +23,8 @@ const DEFAULT_SETTINGS = {
     autoSave: 'off',
     saveMode: 'auto',
     audioHiss: 0.2,
-    audioDistortion: 0.3
+    audioDistortion: 0.3,
+    colorDepth: 128 // 256 = full color, lower = more banding
 };
 
 // Application State
@@ -748,6 +749,17 @@ function processFrame() {
     const renderData = renderImageData.data;
     const currentRawFrameSnapshot = new Uint8ClampedArray(rawData);
 
+    const depth = Math.floor(s.colorDepth);
+    const useBanding = depth < 256;
+    const colorLUT = new Uint8Array(256);
+    
+    if (useBanding) {
+        const valStep = 255 / (depth - 1);
+        for(let i=0; i<256; i++) {
+            colorLUT[i] = Math.round(Math.round(i / valStep) * valStep);
+        }
+    }
+
     // --- Effects ---
     if (cornerMotionRatio > s.motionThreshold) {
         jitterSustain = 4;
@@ -913,6 +925,17 @@ function processFrame() {
                 b = Math.min(255, b+40);
                 const trk = (Math.random()-0.5)*(50+(s.trackingNoise*50));
                 r+=trk; g+=trk; b+=trk;
+            }
+
+            if (useBanding) {
+                // Clamp floats to 0-255 integer range for LUT lookup
+                let ri = r < 0 ? 0 : (r > 255 ? 255 : r);
+                let gi = g < 0 ? 0 : (g > 255 ? 255 : g);
+                let bi = b < 0 ? 0 : (b > 255 ? 255 : b);
+                
+                r = colorLUT[Math.round(ri)];
+                g = colorLUT[Math.round(gi)];
+                b = colorLUT[Math.round(bi)];
             }
 
             const dIdx = (y*renderW + x)*4;
@@ -1360,6 +1383,7 @@ const SETTING_DEFS = [
     { key: 'scanlineIntensity', label: 'SCANLINES', type: 'range', min: 0, max: 1, step: 0.1, unit: '' },
     { key: 'motionThreshold', label: 'MOTION SENSITIVITY', type: 'range', min: 0.01, max: 0.5, step: 0.01, unit: '' },
     { key: 'hueShift', label: 'COLOR TEMP SHIFT', type: 'range', min: 0, max: 2, step: 0.1, unit: 'x' },
+    { key: 'colorDepth', label: 'COLOR DEPTH', type: 'range', min: 2, max: 256, step: 1, unit: ' Lv' },
     { key: 'saturation', label: 'SATURATION', type: 'range', min: 0, max: 4, step: 0.1, unit: 'x' },
     { key: 'brightness', label: 'BRIGHTNESS', type: 'range', min: 0, max: 2, step: 0.1, unit: 'x' },
     { key: 'contrast', label: 'CONTRAST', type: 'range', min: 0, max: 5, step: 0.1, unit: 'x' },
