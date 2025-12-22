@@ -837,26 +837,12 @@ function processFrame() {
             sx += jitterX;
             sy += jitterY;
 
+            // Center coordinates (Green Channel / Detail)
             const srcX = Math.floor(sx);
             const srcY = Math.floor(sy);
             
             let r=0, g=0, b=0;
 
-            // Instead of reading RGB from the same coordinate, we offset them.
-            const fringe = s.lensFringe;
-            let srcX_R = sx, srcX_G = sx, srcX_B = sx;
-
-            if (fringe > 0) {
-                // Distort based on distance from center for realism, or just fixed offset
-                srcX_R = sx - fringe; // Red shifts left
-                srcX_B = sx + fringe; // Blue shifts right
-            }
-
-            // Round coordinates
-            const rX = Math.floor(srcX_R);
-            const gX = Math.floor(srcX_G);
-            const bX = Math.floor(srcX_B);
-            
             // Helper to safe-read pixels
             const getPx = (tx, ty, offset) => {
                 if (tx >= 0 && tx < renderW && ty >= 0 && ty < renderH) {
@@ -865,19 +851,8 @@ function processFrame() {
                 return 0;
             };
 
-            // Read Channels separately
-            if (fringe > 0) {
-                r = getPx(rX, srcY, 0); // Read Red from offset
-                g = getPx(gX, srcY, 1); // Read Green from center
-                b = getPx(bX, srcY, 2); // Read Blue from offset
-            } else {
-                // Standard Read (Optimization)
-                if (gX >= 0 && gX < renderW && srcY >= 0 && srcY < renderH) {
-                    const idx = (srcY * renderW + gX) * 4;
-                    r = sourcePixels[idx]; g = sourcePixels[idx+1]; b = sourcePixels[idx+2];
-                }
-            }
-
+            // 1. PRIMARY READ (Sharpen or Standard)
+            // This establishes the base image (usually the Green channel's perspective)
             if (doSharpen) {
                 if (srcX >= 1 && srcX < renderW - 1 && srcY >= 1 && srcY < renderH - 1) {
                     const cIdx = (srcY * renderW + srcX) * 4;
@@ -906,11 +881,30 @@ function processFrame() {
                     b = c.b*(1+4*sharpAmt) - sharpAmt*(t.b+bt.b+l.b+rt.b);
                 }
             } else {
+                // Standard Read
                 if (srcX >= 0 && srcX < renderW && srcY >= 0 && srcY < renderH) {
                     const idx = (srcY * renderW + srcX) * 4;
                     r = sourcePixels[idx]; g = sourcePixels[idx+1]; b = sourcePixels[idx+2];
                 }
             }
+
+            // 2. LENS FRINGE OVERRIDE
+            // Now that we have the base pixel, we overwrite R and B if fringe is active.
+            // This applies the offset AFTER sharpening/sampling, ensuring it is visible.
+            if (s.lensFringe > 0) {
+                const fringe = s.lensFringe;
+                
+                // Calculate separate coordinates
+                const rX = Math.floor(sx - fringe); // Red shifts left
+                const bX = Math.floor(sx + fringe); // Blue shifts right
+
+                // Overwrite Red and Blue with the raw (unsharpened) offset pixel
+                // Keeping 'g' as the sharpened center pixel creates a realistic lens effect
+                r = getPx(rX, srcY, 0);
+                b = getPx(bX, srcY, 2);
+            }
+
+            // --- Post Processing ---
 
             // Color FX
             if (Math.abs(hueShift) > 0.01) {
@@ -952,16 +946,15 @@ function processFrame() {
 
             r *= s.brightness; g *= s.brightness; b *= s.brightness;
 
-            // Flash Blowout - If flash active frame, override processing
+            // Flash Blowout
             if (state.flashActiveFrame) {
-                // Extreme blowout
                 r = r * 3 + 100;
                 g = g * 3 + 100;
                 b = b * 3 + 100;
             }
 
+            // Bit Crush / Banding
             if (useBanding) {
-                // Clamp floats to 0-255 integer range for LUT lookup
                 let ri = r < 0 ? 0 : (r > 255 ? 255 : r);
                 let gi = g < 0 ? 0 : (g > 255 ? 255 : g);
                 let bi = b < 0 ? 0 : (b > 255 ? 255 : b);
@@ -971,31 +964,29 @@ function processFrame() {
                 b = colorLUT[Math.round(bi)];
             }
 
+            // Vignette
             if (s.vignette > 0) {
-                // simple distance from center normalized 0-1
                 const dx = x - renderW/2;
                 const dy = y - renderH/2;
-                // Max radius is roughly corner distance
                 const maxRad = Math.sqrt((renderW/2)**2 + (renderH/2)**2); 
                 const dist = Math.sqrt(dx*dx + dy*dy);
                 
-                // Inverse Strength: 1 at center, drops off towards edge
                 let vig = 1 - (dist / maxRad) * s.vignette;
-                vig = Math.max(0, vig); // clamp
+                vig = Math.max(0, vig); 
                 
-                // Apply
-                r *= vig;
-                g *= vig;
-                b *= vig;
+                r *= vig; g *= vig; b *= vig;
             }
 
+            // Noise
             const noise = (Math.random()-0.5)*s.noise;
             r+=noise; g+=noise; b+=noise;
 
+            // Scanlines
             if (s.scanlineIntensity > 0 && y%2===0) {
                 r*=scanlineMult; g*=scanlineMult; b*=scanlineMult;
             }
 
+            // Tracking Artifacts
             if (isTrackingRow) {
                 r = Math.min(255, r+40);
                 g = Math.min(255, g+40);
