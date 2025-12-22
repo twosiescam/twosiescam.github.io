@@ -1199,7 +1199,7 @@ async function processCapture(dataUrl) {
             const prevText = els.counterText.textContent;
             els.counterText.textContent = "SAVED";
             setTimeout(() => {
-                els.counterText.textContent = "RDY";
+                els.counterText.textContent = "";
             }, 1000);
         });
     } else {
@@ -1267,7 +1267,7 @@ function startRecording() {
                  state.isLocked = false;
                  els.counterText.textContent = "SAVED";
                  setTimeout(() => {
-                    els.counterText.textContent = "RDY";
+                    els.counterText.textContent = "";
                     URL.revokeObjectURL(url);
                  }, 1000);
                  updateUI();
@@ -1419,7 +1419,7 @@ function updateUI() {
         if (state.isRecording) {
             els.counterText.textContent = state.isLocked ? 'LCK' : 'REC';
         } else if (els.counterText.textContent !== 'SAVED') {
-            els.counterText.textContent = 'RDY';
+            els.counterText.textContent = '';
         }
         
         // Shutter Buttons
